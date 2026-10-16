@@ -1,0 +1,16 @@
+{
+  "name": "playproj",
+  "private": true,
+  "description": "Map projections traced as rays from a point of light, through a sphere, onto a plane",
+  "type": "module",
+  "scripts": {
+    "test": "node test/check-proj.mjs && node test/check-inverse.mjs && node test/check-conic.mjs && node test/check-azimuthal.mjs && node test/check-spilhaus.mjs && node test/check-mishaps.mjs && node test/check-landmesh.mjs && node test/check-secant.mjs && node test/check-s2.mjs && node test/check-oblique.mjs && node test/check-l3bin.mjs && node test/check-grids.mjs && node test/check-mgrs.mjs && node test/check-tissot.mjs",
+    "serve": "python3 -m http.server 8000"
+  },
+  "devDependencies": {
+    "d3-geo": "3.1.1",
+    "proj4": "2.12.1",
+    "three": "0.160.0"
+  },
+  "license": "MIT"
+}
