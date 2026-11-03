@@ -15,8 +15,11 @@ let fails = 0;
 const ok = (cond, msg) => { if (!cond) { fails++; console.log("FAIL " + msg); } };
 
 const root = path.join(path.dirname(new URL(import.meta.url).pathname), "fixtures", "cog");
+// /relay?u=<encoded URL> serves that URL's path, as a CORS relay would
 const server = http.createServer((req, res) => {
-  const p = path.join(root, decodeURIComponent(req.url.split("?")[0]));
+  const u = new URL(req.url, "http://x");
+  const want = u.pathname === "/relay" ? new URL(u.searchParams.get("u")).pathname : decodeURIComponent(u.pathname);
+  const p = path.join(root, want);
   if (!p.startsWith(root) || !fs.existsSync(p) || fs.statSync(p).isDirectory()) { res.writeHead(404); res.end(); return; }
   const buf = fs.readFileSync(p), m = /bytes=(\d*)-(\d*)/.exec(req.headers.range || "");
   if (m && m[1] !== "") {
@@ -75,6 +78,26 @@ ok(R.chooseLevel([[8640, 4320], [4320, 2160]], { level: 9 }) === 1, "chooseLevel
   ok(s.desc.axes.x.n === W && s.desc.axes.y.n === H, `level 0: ${s.desc.axes.x.n} x ${s.desc.axes.y.n}`);
   const v = await s.read(0, 0, 20, 21, 100, 101);
   ok(Math.abs(v[0] / at(100, 0) - 1) < 1e-5, `level 0 cell: ${v[0]} vs ${at(100, 0)}`);
+}
+
+// a relay: a dataset on a host with no CORS header (here one that does not
+// exist), read through the relay and counted under the host
+{
+  ok(R.relayed("https://a.example/x.tif") === "https://a.example/x.tif", "no relay: urls unchanged");
+  R.setRelay({ template: "https://relay.example/{url}", hosts: ["a.example"] });
+  ok(R.relayed("https://a.example/x.tif?b=1") === "https://relay.example/https://a.example/x.tif?b=1", "relay {url}");
+  ok(R.relayed("https://b.example/x.tif") === "https://b.example/x.tif", "relay: unlisted hosts read directly");
+  R.setRelay({ template: "https://relay.example/?u={encoded}", hosts: ["a.example"] });
+  ok(R.relayed("https://a.example/x y") === "https://relay.example/?u=" + encodeURIComponent("https://a.example/x y"), "relay {encoded}");
+  R.setRelay({ template: "https://relay.example/", hosts: ["a.example"] });
+  ok(R.relayed("https://a.example/x") === "https://relay.example/https://a.example/x", "relay prefix");
+  R.setRelay({ template: `${base}/relay?u={encoded}`, hosts: ["nocors.invalid"] });
+  const s = await R.openSource({ ...entry, id: "chl-relay", base: "http://nocors.invalid", width: 32 }, base);
+  const v = await s.read(2, 0, 4, 6, 10, 12);
+  ok(Math.abs(v[0] / at(40, 2) - 1) < 1e-5, `read through the relay: ${v[0]}`);
+  const h = R.hosts.get("nocors.invalid");
+  ok(h && h.ok > 0 && h.fail === 0, `relayed reads counted under the host: ${JSON.stringify(h)}`);
+  R.setRelay({});
 }
 
 // item files: placed by rv:placement, else in order of date
