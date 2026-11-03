@@ -9,3 +9,5 @@ export { displace, hasElevation, EARTH_R } from "./relief.js";
 export { makeMeshLayer } from "./meshlayer.js";
 export { drawLocator, ortho, cssRamp } from "./locator.js";
 export { sceneFrame } from "../core/geo.js";
+export { makeFrame, toVec, fromVec, aeqd, VIEWS } from "./frame.js";
+export { makeTexture, cutout, paint, cssStops } from "./paint.js";

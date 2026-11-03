@@ -699,6 +699,6 @@ syncInputs();
 resize();
 function frame() { controls.update(); renderer.render(scene, camera); requestAnimationFrame(frame); }
 requestAnimationFrame(frame);
-shareLinks("playproj: Cutaway");
+shareLinks("sondage: Cutaway");
 loadOverview().catch((e) => setStatus(`The overview map did not load (${e.message || e})`));
 build().then(() => { window.__cutaway = { state, get current() { return current; }, ready: true }; });
