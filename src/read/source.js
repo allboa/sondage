@@ -9,7 +9,7 @@
 // x0..x1-1, at time index t and level k (k as [k0, k1] reads those levels,
 // level by level). It runs in Node too.
 //
-// A Source comes from one of three places, and every one gives the same
+// A Source comes from one of four places, and every one gives the same
 // desc, so a page draws them alike:
 //
 // - a registry entry with a path: the dataset's flat/arrays.json
@@ -18,6 +18,9 @@
 // - an entry (or a call) with a url: any public Zarr or Icechunk store,
 //   described by probing its metadata (store.js: CF names, grid mappings,
 //   coordinate variables);
+// - a registry entry with form "cog": one Cloud Optimized GeoTIFF per time
+//   step, listed by the dataset's STAC items, read at one overview level
+//   (cog.js);
 // - a synthetic entry: an ocean on the same axes, with no network.
 
 import { IcechunkStore } from "icechunk-js";
@@ -26,6 +29,7 @@ import * as F from "../core/fourd.js";
 import { knownProj4 } from "../core/structure.js";
 import { fetchClient, getJson } from "./hosts.js";
 import { openStore, describeVariable, nodeMeta, read1d } from "./store.js";
+import { openCogSeries } from "./cog.js";
 
 const parentOf = (p) => p.split("/").slice(0, -1).join("/");
 const join = (...p) => p.filter((s) => s !== "" && s != null).join("/").replace(/^\/+/, "");
@@ -53,6 +57,8 @@ function transpose(v, desc, k, ny, nx) {
 // The parts every Source shares.
 function finish(src) {
   const { desc } = src;
+  // an entry may say how its time stamps sit in their periods (fourd.js timeAt)
+  if (src.entry && src.entry.stamp && desc.axes.t) desc.axes.t.stamp = src.entry.stamp;
   src.timeAt = (ms) => F.timeAt(desc, typeof ms === "string" ? F.parseDay(ms) : ms);
   // a lon/lat box as index windows { y: [y0, y1], x: [x0, x1] }, for axes in
   // degrees; null where the box misses the grid
@@ -159,6 +165,7 @@ export async function openSource(entry, base) {
     return finish({ kind: "synthetic", entry, desc: s.desc, meta: null, read });
   }
   if (entry.url) return openUrl(entry.url, entry.var, entry);
+  if (entry.form === "cog") return finish(await openCogSeries(entry, base));
   const urls = F.storeUrls(entry.base || base, entry);
   const meta = await getJson(urls.arrays);
   const desc = F.describe(meta, entry.var);

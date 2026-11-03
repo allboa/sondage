@@ -1,0 +1,105 @@
+{
+ "format_version": "byterefs/0.1",
+ "dimensions": {
+  "time": {
+   "type": "TEMPORAL"
+  },
+  "y": {
+   "type": "HORIZONTAL_Y"
+  },
+  "x": {
+   "type": "HORIZONTAL_X"
+  }
+ },
+ "arrays": [
+  {
+   "array": "chlor_a",
+   "kind": "data",
+   "dims": [
+    "time",
+    "y",
+    "x"
+   ],
+   "shape": [
+    3,
+    64,
+    128
+   ],
+   "chunks": [
+    1,
+    16,
+    16
+   ],
+   "dtype": "<f4",
+   "fill": "NaN",
+   "attrs": {
+    "units": "milligram m-3"
+   },
+   "affine": null,
+   "values": null
+  },
+  {
+   "array": "time",
+   "kind": "coord",
+   "dims": [
+    "time"
+   ],
+   "shape": [
+    3
+   ],
+   "chunks": [
+    3
+   ],
+   "dtype": "<f8",
+   "attrs": {
+    "units": "days since 1970-01-01"
+   },
+   "affine": null,
+   "values": [
+    19723,
+    19754,
+    19783
+   ]
+  },
+  {
+   "array": "x",
+   "kind": "coord",
+   "dims": [
+    "x"
+   ],
+   "shape": [
+    128
+   ],
+   "chunks": [
+    128
+   ],
+   "dtype": "<f8",
+   "attrs": {},
+   "affine": {
+    "start": -178.59375,
+    "step": 2.8125
+   },
+   "values": null
+  },
+  {
+   "array": "y",
+   "kind": "coord",
+   "dims": [
+    "y"
+   ],
+   "shape": [
+    64
+   ],
+   "chunks": [
+    64
+   ],
+   "dtype": "<f8",
+   "attrs": {},
+   "affine": {
+    "start": 88.59375,
+    "step": -2.8125
+   },
+   "values": null
+  }
+ ]
+}

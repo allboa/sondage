@@ -16,7 +16,7 @@
 
 import * as THREE from "three";
 import * as F from "../core/fourd.js";
-import { PALETTES, rampAt } from "../core/palette.js";
+import { PALETTES, rampAt, rampPos } from "../core/palette.js";
 import { makeTexture, cutout, paint } from "./paint.js";
 
 const axisAt = F.coordAt;
@@ -148,14 +148,15 @@ export function paintLayer(P, values, style, mask = null) {
 // at style.iso_step, or ten steps over style.range, plus the low end for a
 // layer that clears below it (an ice edge). Replaces the lines the parts
 // had; the fills are hidden for "lines" but stay in place, so picking still
-// answers. Returns the new lines, or null.
+// answers. On a log scale (style.scale "log10") the levels are 1 and 3 times
+// each power of ten in the range. Returns the new lines, or null.
 export function isoLayer(frame, P, values, style, mode, mask = null) {
   if (P.isoLines) { P.group.remove(P.isoLines); frame.drop(P.isoLines.geometry); P.isoLines.material.dispose(); P.isoLines = null; }
   for (const m of P.fills) m.visible = mode !== "lines";
   if (mode !== "lines" && mode !== "both") return null;
-  const levels = F.isoLevels(style.range, { n: 10, step: style.iso_step ?? null, edge: style.below === "clear" });
-  const stops = PALETTES[style.palette] || PALETTES.viridis, [lo, hi] = style.range;
-  const cols = levels.map((c) => (mode === "both" ? [0.05, 0.06, 0.09] : rampAt(stops, (c - lo) / (hi - lo)).map((x) => x / 255)));
+  const levels = F.isoLevels(style.range, { n: 10, step: style.iso_step ?? null, edge: style.below === "clear", log: style.scale === "log10" });
+  const stops = PALETTES[style.palette] || PALETTES.viridis, pos = rampPos(style);
+  const cols = levels.map((c) => (mode === "both" ? [0.05, 0.06, 0.09] : rampAt(stops, pos(c)).map((x) => x / 255)));
   const llr = [], rgb = [];
   for (const s of P.iso) {
     const { xy, lev } = F.isolines(s.w, s.h, s.at(values, mask), levels);

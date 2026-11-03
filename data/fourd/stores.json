@@ -1,5 +1,5 @@
 {
-  "about": "Datasets for the 4D page. base is the one place the index's home is named: when a group moves to its own repository, change base, or give that entry its own base. A #base= hash key overrides it for a session. iso_step spaces the contour lines (iso mode); a layer that clears below its range also gets a line at the low end, the ice edge.",
+  "about": "Datasets for the 4D page. base is the one place the index's home is named: when a group moves to its own repository, change base, or give that entry its own base. A #base= hash key overrides it for a session. iso_step spaces the contour lines (iso mode); a layer that clears below its range also gets a line at the low end, the ice edge. form cog reads one COG per time step (listed by the dataset's STAC items) at the overview nearest width cells wide; stamp start says each time stamp opens its period (monthly composites); scale log10 spaces the palette over the logs of the range.",
   "base": "https://s3.us-west-2.amazonaws.com/us-west-2.opendata.source.coop/ausantarctic/ausantarctic-scratch",
   "datasets": [
     { "id": "oisst-sst", "title": "OISST sea surface temperature", "path": "oisst/oisst-v2.1-daily", "var": "sst",
@@ -12,6 +12,9 @@
     { "id": "g02202-north", "title": "NSIDC CDR sea ice, north (25 km)", "path": "seaice/g02202-v6-daily-north", "var": "cdr_seaice_conc",
       "kind": "surface", "units": "fraction", "crs": "+proj=stere +lat_0=90 +lat_ts=70 +lon_0=-45 +k=1 +x_0=0 +y_0=0 +a=6378273 +b=6356889.449 +units=m +no_defs",
       "crs_note": "EPSG:3411, assumed: the store has no grid mapping", "palette": "ice", "range": [0.15, 1], "iso_step": 0.2, "valid": [0, 1], "below": "clear", "lift": 3 },
+    { "id": "esacci-chl", "title": "ESA CCI ocean colour chlorophyll-a (monthly)", "path": "oceancolour/esacci-oc-v6.0-monthly-chlor_a", "var": "chlor_a",
+      "form": "cog", "width": 2160, "stamp": "start", "kind": "surface", "units": "mg m-3", "palette": "chl", "scale": "log10", "range": [0.01, 20], "lift": 1,
+      "note": "merged-sensor L3S v6.0, 4 km COGs (one per month, from 1997-09) read at the overview nearest 2160 wide; SeaWiFS colours from palr" },
     { "id": "bran-temp", "title": "Bluelink BRAN potential temperature", "path": "bluelink/bluelink-daily-temp", "var": "temp",
       "kind": "volume", "palette": "viridis", "range": [-2, 30], "iso_step": 2 },
     { "id": "bran-salt", "title": "Bluelink BRAN salinity", "path": "bluelink/bluelink-daily-salt", "var": "salt",
