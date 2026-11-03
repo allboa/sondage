@@ -124,6 +124,35 @@ export function windowOf(ax, lo, hi, { lon = false } = {}) {
   return i1 < 0 ? null : [i0, i1 + 1];
 }
 
+// The coordinate of an axis at a fractional cell index (cell i spans i to
+// i + 1, its centre at i + 0.5), linear between centres and beyond the ends.
+export function coordAt(ax, e) {
+  const v = ax.values, n = v.length, c = e - 0.5;
+  if (n === 1) return v[0];
+  const i = Math.max(0, Math.min(n - 2, Math.floor(c)));
+  return v[i] + (v[i + 1] - v[i]) * (c - i);
+}
+
+// The cell index nearest a coordinate, or -1 outside the axis.
+export function cellOf(ax, x) {
+  const v = ax.values, n = v.length;
+  const step = n > 1 ? v[1] - v[0] : 1;
+  const i = Math.round((x - v[0]) / step);
+  if (ax.affine || n < 3) return i >= 0 && i < n ? i : -1;
+  const asc = v[n - 1] > v[0];
+  const { index, outside } = nearestIndex(asc ? v : Float64Array.from(v).reverse(), x);
+  return outside ? -1 : asc ? index : n - 1 - index;
+}
+
+// Depth edges (m) of levels 0..nk-1 at centres z: 0, the midpoints, and a
+// half step past the last.
+export function depthEdges(z, nk) {
+  const e = [0];
+  for (let k = 1; k < nk; k++) e.push((z[k - 1] + z[k]) / 2);
+  e.push(nk > 1 ? z[nk - 1] + (z[nk - 1] - z[nk - 2]) / 2 : 2 * z[0]);
+  return e;
+}
+
 // The chunks along one axis that a window [i0, i1) touches, as [c0, c1).
 export const chunkSpan = ([i0, i1], chunk) => [Math.floor(i0 / chunk), Math.ceil(i1 / chunk)];
 
