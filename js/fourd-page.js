@@ -14,9 +14,8 @@
 import * as THREE from "three";
 import * as F from "../src/core/fourd.js";
 import * as R from "../src/read/index.js";
-import { PALETTES, rampAt } from "../src/core/palette.js";
 import { loadCoastline } from "./data.js";
-import { makeStage, readParams, hashWriter, shareLinks, oneOf, makeFrame, makeTexture, cutout, paint, cssStops } from "../src/scene/index.js";
+import { makeStage, readParams, hashWriter, shareLinks, oneOf, makeFrame, makeTexture, cutout, cssStops, surfaceLayer, volumeLayer, paintLayer, isoLayer, clearGroup } from "../src/scene/index.js";
 import { hashString } from "../src/core/storecrs.js";
 
 const proj4 = window.proj4;
@@ -123,7 +122,7 @@ function defaultCamera() {
   return [p[0], p[2], -p[1], 0, 0, 0];
 }
 
-const { coordAt: axisAt, cellOf, depthEdges } = F;
+const { cellOf } = F;
 
 const inBox = (lon, lat) => {
   if (lat < box[2] || lat > box[3]) return false;
@@ -205,90 +204,13 @@ function typicalStep(d) {
 // geometry for a layer: a surface mesh over its whole grid, or for an ocean
 // layer the window over the box and its shell and two sections
 function buildParts(L) {
-  for (const c of [...L.group.children]) { L.group.remove(c); dropGeometry(c.geometry); if (c.material.map) c.material.map.dispose(); c.material.dispose(); }
-  const d = L.ds.desc, e = L.entry, ax = d.axes;
-  if (!ax.x || !ax.y) { L.error = "no horizontal axes"; return; }
-  let toLonLat = (x, y) => [x, y];
-  if (e.crs) {
-    const P = proj4(e.crs, "WGS84");
-    toLonLat = (x, y) => { const q = P.forward([x, y]); return isFinite(q[0]) && isFinite(q[1]) ? q : [null, null]; };
-  }
-  if (e.kind !== "volume") {
-    const w = [0, ax.y.n, 0, ax.x.n], nx = ax.x.n, ny = ax.y.n;
-    const tex = makeTexture(nx, ny);
-    const lift = 1 + 0.0012 * (1 + (e.lift || 0));
-    const nu = Math.min(nx, e.crs ? 120 : 360), nv = Math.min(ny, e.crs ? 120 : 180);
-    const geo = gridGeometry(nu, nv, (u, v) => { const [lon, lat] = toLonLat(axisAt(ax.x, u * nx), axisAt(ax.y, v * ny)); return [lon, lat, lift]; });
-    const mesh = new THREE.Mesh(geo, cutout(tex));
-    mesh.userData.layer = L;
-    L.group.add(mesh);
-    // the centre of every cell, for the cut over the box
-    const centres = new Float32Array(nx * ny * 2);
-    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
-      const [lon, lat] = toLonLat(ax.x.values[i], ax.y.values[j]);
-      centres[(j * nx + i) * 2] = lon === null ? NaN : lon; centres[(j * nx + i) * 2 + 1] = lat === null ? NaN : lat;
-    }
-    // contours run through cell centres; the cut hides cells as the fill does
-    const iso = [{ w: nx, h: ny, at: (values, mask) => (i, j) => { const q = j * nx + i; return mask && mask[q] ? NaN : values[q]; },
-      place: (x, y) => [...toLonLat(axisAt(ax.x, x + 0.5), axisAt(ax.y, y + 0.5)), lift + 0.0003] }];
-    L.parts = { kind: "surface", w, k: 0, tex, mesh, centres, toLonLat, nx, ny, fills: [mesh], iso };
-  } else {
-    if (e.crs) { L.error = "an ocean layer in a projected CRS is not drawn yet"; return; }
-    const wy = F.windowOf(ax.y, box[2], box[3]), wx = F.windowOf(ax.x, box[0], box[1], { lon: true });
-    if (!wy || !wx) { L.error = "the box is outside this grid"; L.parts = null; return; }
-    const z = ax.z ? ax.z.values : Float64Array.of(0);
-    let nk = 1;
-    while (nk < z.length && z[nk] <= zmaxM()) nk++;
-    const ny = wy[1] - wy[0], nx = wx[1] - wx[0];
-    const lev = Math.min(state.lev, nk - 1);
-    const edges = depthEdges(z, nk), X = exag();
-    const lonAt = (u) => axisAt(ax.x, wx[0] + u * nx), latAt = (v) => axisAt(ax.y, wy[0] + v * ny);
-    const shellTex = makeTexture(nx, ny);
-    const shell = new THREE.Mesh(gridGeometry(Math.min(nx, 240), Math.min(ny, 240), (u, v) => [lonAt(u), latAt(v), F.depthRadius(z[lev], X)]), cutout(shellTex));
-    const ci = Math.min(nx - 1, Math.round(state.cl * (nx - 1))), rj = Math.min(ny - 1, Math.round(state.cp * (ny - 1)));
-    const lonC = ax.x.values[wx[0] + ci], latC = ax.y.values[wy[0] + rj];
-    const rAt = (v) => { const k = v * nk, i = Math.min(nk - 1, Math.floor(k)); return F.depthRadius(edges[i] + (edges[i + 1] - edges[i]) * (k - i), X); };
-    // vertical sections, all levels: along a meridian at column c (cells
-    // along y) or a parallel at row r (cells along x); the four walls of the
-    // box and the two that move across it
-    const sections = [];
-    const section = (along, at) => {
-      const n = along === "m" ? ny : nx, tex = makeTexture(n, nk);
-      const lonS = along === "m" ? (u) => axisAt(ax.x, wx[0] + at + 0.5) : lonAt;
-      const latS = along === "m" ? latAt : () => axisAt(ax.y, wy[0] + at + 0.5);
-      const mesh = new THREE.Mesh(gridGeometry(Math.min(n, 240), nk, (u, v) => [lonS(u), latS(u), rAt(v)]), cutout(tex));
-      sections.push({ along, at, tex, mesh });
-    };
-    section("m", 0); section("m", nx - 1); section("p", 0); section("p", ny - 1);
-    section("m", ci); section("p", rj);
-    // the box's rim at the surface and at the deepest edge
-    const rim = [];
-    for (const r of [1.0015, F.depthRadius(edges[nk], X)]) {
-      const ring = [];
-      for (let s = 0; s <= 64; s++) ring.push([lonAt(s / 64), latAt(0)]);
-      for (let s = 0; s <= 64; s++) ring.push([lonAt(1), latAt(s / 64)]);
-      for (let s = 64; s >= 0; s--) ring.push([lonAt(s / 64), latAt(1)]);
-      for (let s = 64; s >= 0; s--) ring.push([lonAt(0), latAt(s / 64)]);
-      for (let s = 0; s + 1 < ring.length; s++) rim.push(ring[s][0], ring[s][1], r, ring[s + 1][0], ring[s + 1][1], r);
-    }
-    const rg = lineGeometry(rim);
-    const rimLines = new THREE.LineSegments(rg, new THREE.LineBasicMaterial({ color: COLORS.box, transparent: true, opacity: 0.6 }));
-    for (const m of [shell, ...sections.map((q) => q.mesh)]) { m.userData.layer = L; L.group.add(m); }
-    L.group.add(rimLines);
-    // contours on the shell and on each section, through cell centres
-    const n = nx * ny, rShell = F.depthRadius(z[lev], X);
-    const iso = [{ w: nx, h: ny, at: (values) => (i, j) => values[lev * n + j * nx + i],
-      place: (x, y) => [axisAt(ax.x, wx[0] + x + 0.5), axisAt(ax.y, wy[0] + y + 0.5), rShell] }];
-    for (const q of sections) {
-      const rv = (y) => rAt((y + 0.5) / nk);
-      if (q.along === "m") iso.push({ w: ny, h: nk, at: (values) => (i, k) => values[k * n + i * nx + q.at],
-        place: (x, y) => [axisAt(ax.x, wx[0] + q.at + 0.5), axisAt(ax.y, wy[0] + x + 0.5), rv(y)] });
-      else iso.push({ w: nx, h: nk, at: (values) => (i, k) => values[k * n + q.at * nx + i],
-        place: (x, y) => [axisAt(ax.x, wx[0] + x + 0.5), axisAt(ax.y, wy[0] + q.at + 0.5), rv(y)] });
-    }
-    L.parts = { kind: "volume", w: [wy[0], wy[1], wx[0], wx[1]], k: [0, nk], nk, nx, ny, lev, ci, rj, lonC, latC, z, edges, shellTex, shell, sections,
-      fills: [shell, ...sections.map((q) => q.mesh)], iso };
-  }
+  clearGroup(frame, L.group);
+  const d = L.ds.desc, e = L.entry;
+  const P = e.kind !== "volume"
+    ? surfaceLayer(frame, L.group, d, e, { crs: e.crs, proj4, tag: L })
+    : volumeLayer(frame, L.group, d, e, { crs: e.crs, box, zmax: zmaxM(), lev: state.lev, cl: state.cl, cp: state.cp, exag: exag(), rim: COLORS.box, tag: L });
+  if (P.error) { L.error = P.error; L.parts = null; return; }
+  L.parts = P;
   if (!root.children.includes(L.group)) root.add(L.group);
   if (L.shown) applyData(L, L.shown.values);
 }
@@ -304,44 +226,11 @@ function surfaceMask(L) {
 }
 
 function applyData(L, values) {
-  const P = L.parts, e = L.entry;
+  const P = L.parts;
   if (!P) return;
-  if (P.kind === "surface") { const mask = surfaceMask(L); paint(P.tex, values, e, undefined, mask); drawIso(L, values, mask); return; }
-  const { nx, ny, nk, lev } = P, n = nx * ny;
-  paint(P.shellTex, values, e, (i) => values[lev * n + i]);
-  for (const q of P.sections) {
-    if (q.along === "m") paint(q.tex, values, e, (i) => { const j = i % ny, k = (i / ny) | 0; return values[k * n + j * nx + q.at]; });
-    else paint(q.tex, values, e, (i) => { const x = i % nx, k = (i / nx) | 0; return values[k * n + q.at * nx + x]; });
-  }
-  drawIso(L, values, null);
-}
-
-// Contour lines of a layer (iso mode "lines" or "both"), at the registry's
-// iso_step (or ten steps over the colour range), plus the low end for a
-// layer that clears below it (the ice edge). Lines alone take the palette's
-// colour of their level; over the fill they are dark. The fill meshes stay
-// in place when hidden, so picking still answers.
-function drawIso(L, values, mask) {
-  const P = L.parts, e = L.entry, mode = isoOf(e.id);
-  if (P.isoLines) { L.group.remove(P.isoLines); dropGeometry(P.isoLines.geometry); P.isoLines.material.dispose(); P.isoLines = null; }
-  for (const m of P.fills) m.visible = mode !== "lines";
-  if (mode === "fill") return;
-  const levels = F.isoLevels(e.range, { n: 10, step: e.iso_step ?? null, edge: e.below === "clear" });
-  const stops = PALETTES[e.palette] || PALETTES.viridis, [lo, hi] = e.range;
-  const cols = levels.map((c) => (mode === "both" ? [0.05, 0.06, 0.09] : rampAt(stops, (c - lo) / (hi - lo)).map((x) => x / 255)));
-  const llr = [], rgb = [];
-  for (const s of P.iso) {
-    const { xy, lev } = F.isolines(s.w, s.h, s.at(values, mask), levels);
-    for (let q = 0; q < lev.length; q++) for (const o of [0, 2]) {
-      const p = s.place(xy[4 * q + o], xy[4 * q + o + 1]);
-      llr.push(p[0] ?? NaN, p[1] ?? NaN, p[2]);
-      rgb.push(...cols[lev[q]]);
-    }
-  }
-  if (!llr.length) return;
-  P.isoLines = new THREE.LineSegments(lineGeometry(Float32Array.from(llr), Float32Array.from(rgb)),
-    new THREE.LineBasicMaterial({ vertexColors: true, transparent: mode === "both", opacity: mode === "both" ? 0.8 : 1 }));
-  L.group.add(P.isoLines);
+  const mask = P.kind === "surface" ? surfaceMask(L) : null;
+  paintLayer(P, values, L.entry, mask);
+  isoLayer(frame, P, values, L.entry, isoOf(L.entry.id), mask);
 }
 
 // The same array in gridlook, and in this site's store explorer, at a time
