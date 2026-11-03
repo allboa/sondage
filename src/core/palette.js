@@ -47,7 +47,12 @@ export const PALETTES = {
   blues: [[247, 251, 255], [198, 219, 239], [107, 174, 214], [33, 113, 181], [8, 48, 107]],
   grey: [[0, 0, 0], [255, 255, 255]],
   diverging: [[33, 102, 172], [146, 197, 222], [247, 247, 247], [244, 165, 130], [178, 24, 43]],
-  chl: CHL
+  chl: CHL,
+  // elevation over sea and land, for range [-6000, 6000]: one stop every
+  // 1000 m, so sea level falls on the middle stop, where the shallows'
+  // pale blue meets the lowland green; deep navy at 6000 m down, white at
+  // 6000 m up (high ice and peaks)
+  topo: hexStops("0B1F4B 12336E 1A4C8F 2468AD 3A88C6 6FB0DC CFE8F2 6E9F5A A3B56B C9B47A A88457 D6CFC4 FFFFFF")
 };
 
 // Where a value sits along a style's ramp: 0 at range[0], 1 at range[1],

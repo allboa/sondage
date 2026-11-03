@@ -103,6 +103,23 @@ ok(R.chooseLevel([[8640, 4320], [4320, 2160]], { level: 9 }) === 1, "chooseLevel
   R.setRelay({});
 }
 
+// one COG with no time axis: form cog with a url (a topography, a chart);
+// the description comes from the file (here one month of the fixture,
+// read as a still layer in longitude and latitude)
+{
+  const s = await R.openSource({ id: "one", form: "cog", url: `${base}/cog/chl-0.tif`, width: 32, kind: "surface" }, base);
+  const d = s.desc;
+  ok(!d.axes.t && d.roles.join() === "y,x", `still layer roles ${d.roles}`);
+  ok(d.axes.x.n === 32 && d.axes.y.n === 16 && s.level === 2, `still layer level ${s.level}: ${d.axes.x.n} x ${d.axes.y.n}`);
+  ok(Math.abs(d.axes.x.values[0] - (-180 + 360 / 64)) < 1e-9 && Math.abs(d.axes.y.values[0] - (90 - 180 / 32)) < 1e-9, `still layer centres ${d.axes.x.values[0]} ${d.axes.y.values[0]}`);
+  ok(d.crs === null && !d.rgba && d.bands === 1, `geographic, one band: crs ${d.crs}, bands ${d.bands}`);
+  ok(s.timeAt("2024-01-15").index === null, "no time index");
+  const v = await s.read(0, 0, 5, 6, 13, 14);
+  ok(Math.abs(v[0] / at(4 * 13, 0) - 1) < 1e-5, `still layer cell: ${v[0]} vs ${at(52, 0)}`);
+  const ax = R.fileAxes([100, 200, 0], [10, -10, 0], [8, 4], [4, 2]);
+  ok(ax.x.values.join() === "110,130,150,170" && ax.y.values.join() === "190,170", `fileAxes at half resolution: ${ax.x.values} / ${ax.y.values}`);
+}
+
 // item files: placed by rv:placement, else in order of date
 {
   const f = R.itemFiles([{ properties: { datetime: "2024-02-01T00:00:00Z" }, assets: { data: { href: "b" } } },

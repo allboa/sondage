@@ -106,6 +106,12 @@ near(F.depthRadius(6371, 1000), 0, 1e-12, "6371 m at x 1000 reaches the centre")
   for (const e of [...reg.datasets, ...(reg.probe || [])]) {
     ok(!ids.has(e.id), `unique id ${e.id}`); ids.add(e.id);
     if (e.synthetic) continue;
+    // one COG with no time axis is named by its own url
+    if (e.form === "cog" && e.url) {
+      ok(/^https:\/\/.+\.tif$/.test(e.url) && !e.path, `${e.id}: one COG by url`);
+      if (e.range) ok(e.range.length === 2 && e.kind === "surface", `${e.id} range and kind`);
+      continue;
+    }
     ok(!/^https?:/.test(e.path), `${e.id} path is relative to base`);
     const u = F.storeUrls(reg.base, e);
     ok(u.icechunk.startsWith(reg.base + "/") && u.arrays.endsWith("/flat/arrays.json"), `${e.id} urls`);

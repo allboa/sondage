@@ -20,7 +20,7 @@ and imports this package.
 | --- | --- |
 | `src/core/` | Pure modules (no DOM, canvas or three.js; checked by `test/check-pure.mjs`): axes, clock, windows, unpacking, cache and isolines (`fourd.js`); sections and blocks (`cutaway.js`, `mosaic.js`); CRS and grid inference (`storecrs.js`, `structure.js`, `grids.js`, `chunkgrid.js`); palettes, geoid, projection helpers |
 | `src/scene/` | three.js: the frame every layer is placed in (globe, azimuthal equidistant or Spilhaus map, unfold between them, range, cuts, picking back to the Earth; `frame.js`), the layers (a surface over a whole grid; an ocean box as shell, walls, sections and rim; contour lines through the same cells; `layers.js`), the cutaway's section bands and block diagram (`block.js`), textures painted through palettes (`paint.js`), stage, URL hash state, share and embed links |
-| `src/read/` | Sources: one interface over Icechunk, Zarr, COG series and synthetic data (`source.js`); one COG per time step read at an overview level (`cog.js`); stores described by their own metadata (`store.js`); the per-host read ledger (`hosts.js`) |
+| `src/read/` | Sources: one interface over Icechunk, Zarr, COG series and synthetic data (`source.js`); one COG per time step read at an overview level, or one COG with no time axis such as a topography or an RGB chart (`cog.js`); stores described by their own metadata (`store.js`); the per-host read ledger (`hosts.js`) |
 | `fourd.html`, `cutaway.html` | The two viewers |
 | `data/fourd/stores.json` | Example registry |
 | `examples/block.html` | A block diagram from made-up layers, with no data: `drawBlock()` on its own |

@@ -3,7 +3,7 @@
 // values, with contour lines; and the read window each one asks for.
 import * as THREE from "three";
 import { makeFrame } from "../src/scene/frame.js";
-import { surfaceLayer, volumeLayer, paintLayer, isoLayer, clearGroup } from "../src/scene/layers.js";
+import { surfaceLayer, volumeLayer, paintLayer, isoLayer, reliefLayer, clearGroup } from "../src/scene/layers.js";
 import * as F from "../src/core/fourd.js";
 
 let fails = 0;
@@ -61,4 +61,30 @@ const style = { palette: "viridis", range: [0, 12], iso_step: 1 };
 }
 
 console.log(`layers: surface and ocean box built, painted and contoured${fails ? `, ${fails} failing` : ", all agree"}`);
-process.exit(fails ? 1 : 0);
+process.exit(fails ? 1 : 0);// a topography in relief, an image clipped at a latitude
+{
+  const n = 8, desc = { axes: { x: { n: 2 * n, values: Float64Array.from({ length: 2 * n }, (_, i) => -180 + (360 / (2 * n)) * (i + 0.5)) },
+    y: { n, values: Float64Array.from({ length: n }, (_, j) => 90 - (180 / n) * (j + 0.5)) } } };
+  const g = new THREE.Group();
+  const topo = { palette: "topo", range: [-6000, 6000], relief: true, lift: 0 };
+  const P = surfaceLayer(frame, g, desc, topo);
+  const vals = Float32Array.from({ length: 2 * n * n }, (_, i) => (i % (2 * n) < n ? -4000 : 2000));
+  reliefLayer(frame, P, vals, 100);
+  const llr = P.mesh.geometry.userData.llr, rs = [];
+  for (let q = 2; q < llr.length; q += 3) rs.push(llr[q]);
+  const lo = P.lift - (4000 * 100) / F.EARTH_R, hi = P.lift + (2000 * 100) / F.EARTH_R;
+  ok(rs.every((r) => Math.abs(r - lo) < 1e-6 || Math.abs(r - hi) < 1e-6), "relief: every vertex at its cell's height");
+  ok(rs.some((r) => r < 1) && rs.some((r) => r > 1), "relief: sea floor below the sphere, land above");
+  paintLayer(P, vals, topo);
+  ok(P.tex.image.data[3] === 255, "topography painted");
+  const lines = isoLayer(frame, P, vals, { ...topo, iso_step: 1000 }, "lines");
+  ok(lines && lines.geometry.userData.llr[2] > lo, "contours ride on the relief");
+  const img = surfaceLayer(frame, g, { ...desc, rgba: true }, { clip_lat: -45 });
+  const rgba = new Uint8Array(2 * n * n * 4).fill(200);
+  paintLayer(img, rgba, {});
+  const a = (j) => img.tex.image.data[4 * (j * 2 * n) + 3];
+  ok(a(0) === 0 && a(n - 1) === 255 && img.tex.image.data[4 * (2 * n * (n - 1))] === 200, "image: its own colours, cleared north of the clip");
+  clearGroup(frame, g);
+}
+
+

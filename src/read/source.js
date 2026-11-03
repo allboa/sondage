@@ -20,7 +20,8 @@
 //   coordinate variables);
 // - a registry entry with form "cog": one Cloud Optimized GeoTIFF per time
 //   step, listed by the dataset's STAC items, read at one overview level
-//   (cog.js);
+//   (cog.js), or with a url instead of a path, one COG with no time axis
+//   (a topography, or a chart as an RGB image);
 // - a synthetic entry: an ocean on the same axes, with no network.
 
 import { IcechunkStore } from "icechunk-js";
@@ -29,7 +30,7 @@ import * as F from "../core/fourd.js";
 import { knownProj4 } from "../core/structure.js";
 import { fetchClient, getJson, setRelay, totals, readStats } from "./hosts.js";
 import { openStore, describeVariable, nodeMeta, read1d } from "./store.js";
-import { openCogSeries } from "./cog.js";
+import { openCogSeries, openCogFile } from "./cog.js";
 
 const parentOf = (p) => p.split("/").slice(0, -1).join("/");
 const join = (...p) => p.filter((s) => s !== "" && s != null).join("/").replace(/^\/+/, "");
@@ -173,6 +174,7 @@ export async function openSource(entry, base) {
     };
     return finish({ kind: "synthetic", entry, desc: s.desc, meta: null, read });
   }
+  if (entry.form === "cog" && entry.url) return finish(await openCogFile(entry, { knownProj4 }));
   if (entry.url) return openUrl(entry.url, entry.var, entry);
   if (entry.form === "cog") return finish(await openCogSeries(entry, base));
   const urls = F.storeUrls(entry.base || base, entry);

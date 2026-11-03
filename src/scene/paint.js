@@ -42,3 +42,12 @@ export function cssStops(style, n = 16) {
   const pick = stops.length <= n ? stops : Array.from({ length: n }, (_, i) => rampAt(stops, i / (n - 1)).map(Math.round));
   return pick.map((c) => `rgb(${c.join(",")})`).join(",");
 }
+
+// RGBA bytes (row major, w by h, as an image Source reads them) into a
+// texture; cells the mask hides are transparent.
+export function paintRGBA(tex, rgba, mask = null) {
+  const data = tex.image.data;
+  data.set(rgba.subarray(0, data.length));
+  if (mask) for (let i = 0; i < mask.length; i++) if (mask[i]) data[4 * i + 3] = 0;
+  tex.needsUpdate = true;
+}

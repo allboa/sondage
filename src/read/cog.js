@@ -163,3 +163,61 @@ export async function openCogSeries(entry, base) {
   };
   return { kind: "cog", entry, desc, meta, urls, files, level, read };
 }
+
+// ------------------------------------------------------------ one COG
+
+// One Cloud Optimized GeoTIFF with no time axis (a topography, a chart), as
+// a Source: a registry entry with form "cog" and a url (a series has a path
+// instead). The description comes from the file itself: the level chosen as
+// for a series (entry.width, or entry.level), its cell centres from the
+// file's origin and resolution scaled to that level, the CRS from
+// entry.crs, else the file's EPSG code (knownProj4), else none for
+// longitude and latitude. A file of three or more bands read with no
+// entry.band is an image: read gives RGBA bytes (desc.rgba), through
+// geotiff.js's readRGB, so a JPEG's YCbCr comes back as RGB. Otherwise read
+// gives band entry.band (0 by default) as physical values.
+export function fileAxes(origin, res, full, [w, h]) {
+  const sx = (res[0] * full[0]) / w, sy = (res[1] * full[1]) / h;
+  const axis = (dim, index, x0, s, n) => {
+    const values = Float64Array.from({ length: n }, (_, i) => x0 + s * (i + 0.5));
+    return { dim, index, n, values, units: "", affine: { start: values[0], step: s } };
+  };
+  return { y: axis("y", 0, origin[1], sy, h), x: axis("x", 1, origin[0], sx, w) };
+}
+
+export async function openCogFile(entry, { knownProj4 = null } = {}) {
+  const url = entry.url;
+  const { images } = await openCog(url);
+  const sizes = images.map((im) => [im.getWidth(), im.getHeight()]);
+  const level = chooseLevel(sizes, entry);
+  const im0 = images[0], im = images[level];
+  const keys = im0.getGeoKeys() || {};
+  const geographic = keys.GTModelTypeGeoKey === 2;
+  const epsg = keys.ProjectedCSTypeGeoKey;
+  const crs = entry.crs || (!geographic && epsg && knownProj4 ? knownProj4(epsg) : null) || null;
+  const bands = im0.getSamplesPerPixel();
+  const rgba = bands >= 3 && (entry.band === undefined || entry.band === null);
+  const axes = fileAxes(im0.getOrigin(), im0.getResolution(), sizes[0], sizes[level]);
+  axes.y.chunk = im.getTileHeight(); axes.x.chunk = im.getTileWidth();
+  const nodata = im0.getGDALNoData();
+  const desc = {
+    name: entry.var || url.split("/").pop(), dims: ["y", "x"], roles: ["y", "x"], shape: [axes.y.n, axes.x.n],
+    chunks: [axes.y.chunk, axes.x.chunk], dtype: rgba ? "uint8" : "int16", units: entry.units || "",
+    longName: entry.title || url, scale: 1, offset: 0, fill: nodata, axes, crs, rgba, bands, notes: [],
+    cog: { level, sizes, full: sizes[0], epsg: epsg || (geographic ? 4326 : null) }
+  };
+  if (!crs && !geographic) desc.notes.push(`EPSG:${epsg} has no proj4 string here: give the entry a crs`);
+  if (level > 0) desc.notes.push(`overview ${level} of ${sizes.length - 1}: ${sizes[level][0]} x ${sizes[level][1]}, from ${sizes[0][0]} x ${sizes[0][1]}`);
+  const read = async (t, k, y0, y1, x0, x1) => {
+    const window = [x0, y0, x1, y1];
+    if (rgba) {
+      const rgb = await im.readRGB({ window, interleave: true });
+      const n = (y1 - y0) * (x1 - x0), out = new Uint8Array(n * 4);
+      for (let i = 0; i < n; i++) { out[4 * i] = rgb[3 * i]; out[4 * i + 1] = rgb[3 * i + 1]; out[4 * i + 2] = rgb[3 * i + 2]; out[4 * i + 3] = 255; }
+      return out;
+    }
+    const raw = await im.readRasters({ window, samples: [entry.band || 0], interleave: true });
+    return F.unpack(raw, desc, { valid: entry.valid || null });
+  };
+  return { kind: "cog", entry, desc, meta: null, urls: null, files: [url], level, read };
+}

@@ -3,6 +3,6 @@
 // or in Node; nothing here touches the DOM or three.js.
 
 export { openSource, openDataset, openUrl, openRegistry, describeStore, makeReader } from "./source.js";
-export { openCogSeries, openCog, chooseLevel, levelAxes, itemFiles, setGeoTIFF } from "./cog.js";
+export { openCogSeries, openCogFile, openCog, chooseLevel, levelAxes, fileAxes, itemFiles, setGeoTIFF } from "./cog.js";
 export { hosts, totals, readStats, setFetchListener, countedFetch, setRelay, relayed, fetchClient, getJson, maybeJson } from "./hosts.js";
 export { openStore, openFiles, describeVariable, dataArrays, readChunk, readSlice, httpUrl, looksIcechunk, ASSUME } from "./store.js";
