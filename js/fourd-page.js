@@ -31,7 +31,7 @@ const STEPS = ["day", "5day", "month", "year"];
 
 const defaults = {
   date: "2025-09-15", layers: "oisst-sst,g02202-south,bran-temp", box: "60,90,-70,-45",
-  lev: 30, zmax: 3, dz: 3, rz: 1.3, cl: 0.5, cp: 0.5, cut: 1, coast: 1, step: "day", base: "", relay: "", view: "globe", t: 1, range: 20000, clon: null, clat: null, cam: null, iso: ""
+  lev: 30, zmax: 3, dz: 3, rz: 1.3, cl: 0.5, cp: 0.5, cut: 1, coast: 1, step: "day", base: "", relay: "", coalesce: 1, view: "globe", t: 1, range: 20000, clon: null, clat: null, cam: null, iso: ""
 };
 const state = { ...defaults };
 function readHash() {
@@ -369,6 +369,7 @@ function recordFrame(date, results, todo, painted, { t0, tRead, tPaint }) {
         fetchMs: r1(st.fetchMs), tiles: st.tiles, decodeMs: r1(st.decodeMs), unpackMs: r1(st.unpackMs), fileOpenMs: st.opened ? r1(st.openMs) : null,
         paintMs: r1(pz.paintMs), isoMs: r1(pz.isoMs), cells: v.values.length });
     } else if (r.status === "rejected") row.error = String(r.reason?.message || r.reason);
+    else if (v && v.outside) row.outside = true;
     rec.layers.push(row);
   });
   // drawing: the next two frames' render time, and when the pixels are up
@@ -380,17 +381,32 @@ function recordFrame(date, results, todo, painted, { t0, tRead, tPaint }) {
   }));
 }
 
+// The next n time steps a layer will show as the clock moves on from ms by
+// its step: each layer's own steps, so a monthly layer on a daily clock
+// reads the next months, not the same month again. The clock walks at most
+// WALK steps looking.
+const WALK = 400;
+function nextPlans(L, ms, n = AHEAD) {
+  const out = [];
+  if (!L.ds || !L.parts || L.failed || !L.ds.desc.axes.t) return out;
+  const now = readPlan(L, ms), seen = new Set([now && !now.outside ? now.tt.index : null]);
+  let t = ms;
+  for (let s = 0; s < WALK && out.length < n; s++) {
+    t = F.stepFrom(t, state.step, 1);
+    if (dayOf(t) > span[1]) break;
+    const plan = readPlan(L, t);
+    if (!plan || plan.outside || seen.has(plan.tt.index)) continue;
+    seen.add(plan.tt.index); out.push({ plan, t });
+  }
+  return out;
+}
+
 // how many of the next AHEAD steps of each layer are decoded already
 function aheadReady() {
-  let ready = 0, all = 0, t = dateMs();
-  for (let s = 0; s < AHEAD; s++) {
-    t = F.stepFrom(t, state.step, 1);
-    for (const L of activeLayers()) {
-      if (!L.ds || !L.parts || L.failed) continue;
-      const plan = readPlan(L, t);
-      if (!plan || plan.outside) continue;
-      all++; if (reader.how(L.ds, plan.tt.index, plan.k, plan.w) === "cache") ready++;
-    }
+  let ready = 0, all = 0;
+  const ms = dateMs();
+  for (const L of activeLayers()) for (const { plan } of nextPlans(L, ms)) {
+    all++; if (reader.how(L.ds, plan.tt.index, plan.k, plan.w) === "cache") ready++;
   }
   return { ready, all };
 }
@@ -410,8 +426,10 @@ function renderTiming() {
   T.append(tr0);
   for (const l of f.layers) {
     const tr = document.createElement("tr");
-    const cells = l.ok ? [l.id, l.how, fmt(l.waitMs), l.mb, fmt((l.paintMs || 0) + (l.isoMs || 0))] : [l.id, "failed", "", "", ""];
+    const cells = l.ok ? [l.id, l.how, fmt(l.waitMs), l.mb, fmt((l.paintMs || 0) + (l.isoMs || 0))] : [l.id, l.outside ? "outside" : "failed", "", "", ""];
     for (const c of cells) { const td = document.createElement("td"); td.textContent = c ?? ""; tr.append(td); }
+    if (l.outside) tr.title = "no data near this date: outside the layer's time span";
+    if (l.error) tr.title = l.error;
     if (l.ok) tr.title = `time step ${l.t}, ${l.cells} cells; read ${fmt(l.readMs)} ms, ${l.reads} requests; paint ${fmt(l.paintMs)} ms, lines ${fmt(l.isoMs)} ms` + (l.fetchMs != null ? `; fetch ${fmt(l.fetchMs)} ms summed over ${l.reads} requests, ${l.tiles} tiles, decode ${fmt(l.decodeMs)} ms, unpack ${fmt(l.unpackMs)} ms${l.fileOpenMs != null ? `, file header ${fmt(l.fileOpenMs)} ms` : ""}` : "") +
       (l.how !== "read" ? " (the read ran earlier, ahead of this date)" : "") + (l.shared ? "; reads and MB are every host's while it ran" : "");
     T.append(tr);
@@ -423,30 +441,27 @@ ui.copyTiming.addEventListener("click", async () => {
   setTimeout(() => { ui.copyTiming.textContent = "Copy timings"; }, 1500);
 });
 
-// read ahead: the next few dates of every active layer, one at a time
+// read ahead: the next few time steps of every active layer, the layers in
+// parallel (they are mostly on different hosts) and each layer's steps one
+// at a time, nearest first
 let fetching = 0;
-async function prefetch(ms) {
+function prefetch(ms) {
   const ticket = ++fetching;
-  let t = ms;
-  for (let s = 0; s < AHEAD; s++) {
-    t = F.stepFrom(t, state.step, 1);
-    for (const L of activeLayers()) {
+  return Promise.all(activeLayers().map(async (L) => {
+    for (const { plan, t } of nextPlans(L, ms)) {
       if (ticket !== fetching) return;
-      if (!L.ds || !L.parts || L.failed) continue;
-      const plan = readPlan(L, t);
-      if (!plan || plan.outside) continue;
       const how = reader.how(L.ds, plan.tt.index, plan.k, plan.w), t0 = performance.now();
       try {
         const v = await reader.slab(L.ds, plan.tt.index, plan.k, plan.w);
         if (how === "read") {
           const st = R.readStats.get(v) || {};
-          timing.ahead.push({ id: L.entry.id, date: F.isoDay(t), t: plan.tt.index, ms: Math.round(performance.now() - t0), mb: st.bytes != null ? +(st.bytes / 2 ** 20).toFixed(2) : null, reads: st.reads, decodeMs: st.decodeMs != null ? Math.round(st.decodeMs) : null });
+          timing.ahead.push({ id: L.entry.id, date: F.isoDay(t), t: plan.tt.index, ms: Math.round(performance.now() - t0), mb: st.bytes != null ? +(st.bytes / 2 ** 20).toFixed(2) : null, reads: st.reads, shared: st.shared, decodeMs: st.decodeMs != null ? Math.round(st.decodeMs) : null });
           if (timing.ahead.length > KEEP) timing.ahead.shift();
           renderTiming();
         }
       } catch (e) { /* shown when it is the date */ }
     }
-  }
+  }));
 }
 
 function setDate(ms) {
@@ -737,6 +752,8 @@ async function start() {
   baseUrl = state.base || registry.base;
   // hosts with no CORS header are read through the relay (#relay= overrides the file's)
   R.setRelay({ hosts: (registry.relay && registry.relay.hosts) || [], template: state.relay || (registry.relay && registry.relay.template) || null });
+  // chunk reads close together in one file go as one request (#coalesce=0 to compare; read when a layer opens)
+  R.setCoalescing(state.coalesce !== 0);
   for (const e of registry.datasets) layers.set(e.id, newLayer(e));
   ui.credit.textContent = "OISST v2.1: NOAA NCEI. Sea ice: NOAA/NSIDC CDR G02202 v6. BRAN: CSIRO Bluelink, at NCI. IBCSO v2: Dorschel et al. (2022), doi:10.1594/PANGAEA.937574, CC BY 4.0. GEBCO 2026 Grid: GEBCO Compilation Group. Indexes and COG copies: raad.virtualize, on source.coop.";
   setCamera(state.cam || defaultCamera());
@@ -744,7 +761,7 @@ async function start() {
   renderControls(); renderLayers();
   await openActive();
   await show();
-  window.__fourd = { state, layers, reader, hosts: R.hosts, timings: timing.frames, ready: true };
+  window.__fourd = { state, layers, reader, hosts: R.hosts, timings: timing.frames, ahead: timing.ahead, ready: true };
 }
 
 function tick() {

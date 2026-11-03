@@ -19,18 +19,30 @@ export const cutout = (map) => new THREE.MeshBasicMaterial({ map, side: THREE.Do
 // values (row major, w by h) into a texture through style.palette over
 // style.range (on a log scale when style.scale is "log10"); NaN, values below the range when style.below is "clear", and
 // cells the mask hides are transparent. get(i) reads value i (for a slice
-// of a bigger array).
+// of a bigger array). Colours come from a table of LUT_N steps along the
+// ramp, made once per palette, so a cell costs a position and a lookup.
+const LUT_N = 1024;
+const luts = new Map();
+function lutOf(stops) {
+  let lut = luts.get(stops);
+  if (!lut) {
+    lut = new Uint8Array(LUT_N * 3);
+    for (let i = 0; i < LUT_N; i++) { const c = rampAt(stops, i / (LUT_N - 1)); lut[3 * i] = Math.round(c[0]); lut[3 * i + 1] = Math.round(c[1]); lut[3 * i + 2] = Math.round(c[2]); }
+    luts.set(stops, lut);
+  }
+  return lut;
+}
 export function paint(tex, values, style, get = (i) => values[i], mask = null) {
   const { width: w, height: h, data } = tex.image;
-  const stops = PALETTES[style.palette] || PALETTES.viridis, pos = rampPos(style);
-  const clear = style.below === "clear";
+  const stops = PALETTES[style.palette] || PALETTES.viridis, pos = rampPos(style), lut = lutOf(stops);
+  const clear = style.below === "clear", top = LUT_N - 1;
   for (let i = 0, n = w * h; i < n; i++) {
     const v = get(i), o = i * 4;
     if (v !== v || (mask && mask[i])) { data[o + 3] = 0; continue; }
     const t = pos(v);
     if (clear && t < 0) { data[o + 3] = 0; continue; }
-    const c = rampAt(stops, t);
-    data[o] = c[0]; data[o + 1] = c[1]; data[o + 2] = c[2]; data[o + 3] = 255;
+    const j = 3 * (t <= 0 ? 0 : t >= 1 ? top : Math.round(t * top));
+    data[o] = lut[j]; data[o + 1] = lut[j + 1]; data[o + 2] = lut[j + 2]; data[o + 3] = 255;
   }
   tex.needsUpdate = true;
 }
