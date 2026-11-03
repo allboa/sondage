@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sondage: Ideas</title>
+<meta name="description" content="Parked ideas for sondage: what to reach for next, from retreat-to-bloom timing to faster reads and a mixed flat store.">
+<link rel="stylesheet" href="css/app.css">
+<style>
+  html, body { height: auto; }
+  .doc { max-width: 760px; margin: 0 auto; padding: 24px 16px 64px; }
+  .doc h1 { font-size: 22px; margin: 0 0 4px; }
+  .doc h2 { font-size: 17px; margin: 32px 0 8px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+  .doc h3 { font-size: 14px; margin: 18px 0 4px; color: var(--accent); }
+  .doc p, .doc li { color: var(--text); }
+  .doc .lede { color: var(--muted); }
+  .doc code { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-size: 13px; }
+  .doc ul { padding-left: 20px; }
+  .doc li { margin: 4px 0; }
+  .doc .tag { display: inline-block; font-size: 11px; color: var(--bg); background: var(--green); border-radius: 3px; padding: 0 5px; margin-right: 6px; vertical-align: 1px; }
+  .doc .tag.open { background: var(--orange); }
+  .doc nav.pages { margin: 0 0 20px; }
+</style>
+</head>
+<body>
+<div class="doc">
+  <h1>sondage: ideas, parked</h1>
+  <nav class="pages"><span class="group"><a href="./fourd.html">Time and depth</a><a href="./cutaway.html">Cutaway</a><a href="./ideas.html" aria-current="page">Ideas</a></span></nav>
+  <p class="lede">Leads collected on 3 November 2026, the day monthly ESA CCI chlorophyll joined sea ice on the 4D page and the animation became watchable.
+    Nothing here is promised. It is a list to reach for when there is time for the next wave.
+    <span class="tag">done</span> marks what already works, <span class="tag open">open</span> what is waiting on a question.</p>
+
+  <h2>Where it stands</h2>
+  <ul>
+    <li><span class="tag">done</span>Chlorophyll reads the 2160 by 1080 overview (<code>chlor_a_x4</code>) through the raad.virtualize index refs, like sea ice, instead of through the COG headers: about half the time, a third of the requests.</li>
+    <li><span class="tag">done</span>Chunk reads that sit close together in one file go as one range request (zarrita's <code>withRangeCoalescing</code> through icechunk-js): a month of chlorophyll is 1 request, not 15. <code>#coalesce=0</code> turns it off to compare.</li>
+    <li><span class="tag">done</span>Read-ahead steps through each layer's own next time steps, all layers at once. The Timing panel (Copy timings) says where each date's time went.</li>
+    <li><span class="tag">done</span>Time series at the picked point: every surface layer against time over 1 to 8 years, with the sea ice edge marked, and a line on when the ice fell through 15% and when the other layer peaked before it came back.</li>
+  </ul>
+
+  <h2>Retreat to bloom: when and where</h2>
+  <p>The question the animation opened up: sea ice retreat seeds production, but when and where, and with what lag.</p>
+  <h3>A lag map over the ice zone</h3>
+  <p>The point series computes one lag (ice falls below its edge, chlorophyll peaks before the ice returns). Doing that for every cell of the seasonal ice zone, per season, gives a map of the lag, and a year by year stack of them. The pure parts are in <code>src/core/series.js</code> already (<code>crossings</code>, <code>peakAfter</code>, <code>retreatToPeak</code>); what a map needs is reads that run along time instead of across space (see time-chunked copies, below).</p>
+  <h3>Time since melt</h3>
+  <p>raadtools has a time-since-melt product (<a href="https://github.com/AustralianAntarcticDivision/raadtools/blob/main/R/deriv.R"><code>R/deriv.R</code></a>, <code>calc_time_since_melt</code>). It stores no maps. It stores a table of transitions, one row per cell and date where the cell's state changed (columns <code>idx</code>, <code>date</code>, <code>state</code>: melted, open water never frozen, or frozen), on the NSIDC 25 km south polar stereographic grid (316 by 332). Any date's map is rebuilt from it: the last transition at or before the date gives days since melt, cells still frozen take the next melt after it, and a few sentinel codes mark land, open ocean and ice that never melted.</p>
+  <ul>
+    <li>That table is small and sorted, so it travels well: exported as Parquet next to the other indexes, the browser could rebuild any date's map in a few milliseconds (a pure function in <code>src/core</code>), and a point's series is just that cell's rows.</li>
+    <li>As a layer it would sit with sea ice and chlorophyll on the same clock: time since melt is the x axis the bloom question wants.</li>
+    <li><span class="tag open">open</span>Where the DuckDB transitions table is built: it comes off the back of the bowerbird and blueant data repository, but the code that builds it is not located yet.</li>
+  </ul>
+
+  <h2>Faster reads</h2>
+  <ul>
+    <li><b>Pawsey over S3.</b> Pawsey Acacia also speaks the S3 API. Worth trying at the raad.virtualize level, with the store able to name either form for the same objects. Today Pawsey answers HTTP/1.1, so a browser keeps about six requests open to it, and each took about 1.3 s.</li>
+    <li><b>Time-chunked copies.</b> A point series reads one whole chunk per time step (186 steps of two daily OISST layers took about 30 s). A copy chunked along time (for a region, or at overview resolution) would make series and lag maps a handful of reads.</li>
+    <li><b>Overview arrays.</b> <code>chlor_a_x2</code> to <code>x32</code> carry no <code>units</code> attribute yet; the registry fills it in.</li>
+    <li><b>The COG header route</b> (kept for comparison): open only the image a read needs, not every IFD, and ask for bigger blocks.</li>
+    <li><b>A mixed flat store.</b> The overview build showed that jobs at the flat store level are cheap. That opens a Lance-backed flat store, with a generic fallback, holding materialised and virtual chunks side by side: one of Icechunk's big offers, with less bespoke tooling.</li>
+  </ul>
+
+  <h2>The viewer</h2>
+  <ul>
+    <li><span class="tag open">open</span>The relay URL for NSIDC (no CORS): <code>stores.json</code> lists the host, and the relay needs it on its list too.</li>
+    <li>Colour on the GPU: values as a float texture and the palette as a lookup in a shader, so painting leaves the main thread.</li>
+    <li>Series for ocean model layers at the level shown, and a CSV of any series.</li>
+    <li>Play by a layer's own step, so a monthly layer on a daily clock does not repeat its month.</li>
+  </ul>
+
+  <h2>Back into the spec</h2>
+  <ul>
+    <li>The <code>log10</code> palette scale and the <code>stamp: "start"</code> time convention are sondage extensions. Both belong in <a href="https://github.com/allboa/scenespec">allboa/scenespec</a> (the palette record, and the time axis in scenespec#9).</li>
+    <li>The Source description is where the allboa shared axis description starts (<a href="https://github.com/allboa/design">allboa/design</a>).</li>
+  </ul>
+</div>
+</body>
+</html>

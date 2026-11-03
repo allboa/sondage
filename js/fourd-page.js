@@ -13,6 +13,8 @@
 
 import * as THREE from "three";
 import * as F from "../src/core/fourd.js";
+import { sampleIndices, retreatToPeak } from "../src/core/series.js";
+import { rampPos } from "../src/core/palette.js";
 import * as R from "../src/read/index.js";
 import { loadCoastline } from "./data.js";
 import { makeStage, readParams, hashWriter, shareLinks, oneOf, makeFrame, makeTexture, cutout, cssStops, surfaceLayer, volumeLayer, paintLayer, isoLayer, reliefLayer, clearGroup } from "../src/scene/index.js";
@@ -31,7 +33,7 @@ const STEPS = ["day", "5day", "month", "year"];
 
 const defaults = {
   date: "2025-09-15", layers: "oisst-sst,g02202-south,bran-temp", box: "60,90,-70,-45",
-  lev: 30, zmax: 3, dz: 3, rz: 1.3, cl: 0.5, cp: 0.5, cut: 1, coast: 1, step: "day", base: "", relay: "", coalesce: 1, view: "globe", t: 1, range: 20000, clon: null, clat: null, cam: null, iso: ""
+  lev: 30, zmax: 3, dz: 3, rz: 1.3, cl: 0.5, cp: 0.5, cut: 1, coast: 1, step: "day", base: "", relay: "", coalesce: 1, series: 0, view: "globe", t: 1, range: 20000, clon: null, clat: null, cam: null, iso: ""
 };
 const state = { ...defaults };
 function readHash() {
@@ -73,7 +75,8 @@ const ui = {
   pick: $("pick-table").tBodies[0], profile: $("profile"), pickHint: $("pick-hint"),
   view: $("view"), t: $("t"), tOut: $("t-out"), range: $("range"), rangeOut: $("range-out"), centrePick: $("centre-pick"), centreBox: $("centre-box"),
   probe: $("probe"), reset: $("reset-view"), hosts: $("hosts").tBodies[0], status: $("status"), credit: $("credit"),
-  timing: $("timing").tBodies[0], timingSum: $("timing-sum"), copyTiming: $("copy-timing")
+  timing: $("timing").tBodies[0], timingSum: $("timing-sum"), copyTiming: $("copy-timing"),
+  seriesGo: $("series-go"), seriesSpan: $("series-span"), seriesOff: $("series-off"), series: $("series"), seriesKey: $("series-key"), seriesNote: $("series-note")
 };
 
 const dayOf = (ms) => Math.floor(ms / DAY);
@@ -641,7 +644,18 @@ renderer.domElement.addEventListener("pointerup", (e) => {
   if (!pickAt) return;
   placeMarker();
   refreshPick();
+  if (state.series) showSeries();
 });
+
+// a layer's grid cell [i, j] at a longitude and latitude (-1 outside)
+function cellAt(L, lon, lat) {
+  const ax = L.ds.desc.axes;
+  if (L.entry.crs) {
+    const q = proj4(L.entry.crs).forward([lon, lat]);
+    return [cellOf(ax.x, q[0]), cellOf(ax.y, q[1])];
+  }
+  return [cellOf(ax.x, ((((lon - ax.x.values[0]) % 360) + 360) % 360) + ax.x.values[0]), cellOf(ax.y, lat)];
+}
 
 function row(k, v, cls) {
   const tr = document.createElement("tr"), a = document.createElement("td"), b = document.createElement("td");
@@ -661,14 +675,8 @@ function refreshPick() {
   row("Point", `${lat.toFixed(2)}${DEG}, ${lon.toFixed(2)}${DEG}${depth > 1 ? `, ${depth.toFixed(0)} m down` : ""}`);
   for (const L of activeLayers()) {
     if (!L.visible || !L.shown) continue;
-    const d = L.ds.desc, ax = d.axes, P = L.parts, vals = L.shown.values, plan = L.shown.plan;
-    let i, j;
-    if (L.entry.crs) {
-      const q = proj4(L.entry.crs).forward([lon, lat]);
-      i = cellOf(ax.x, q[0]); j = cellOf(ax.y, q[1]);
-    } else {
-      i = cellOf(ax.x, ((((lon - ax.x.values[0]) % 360) + 360) % 360) + ax.x.values[0]); j = cellOf(ax.y, lat);
-    }
+    const d = L.ds.desc, P = L.parts, vals = L.shown.values, plan = L.shown.plan;
+    const [i, j] = cellAt(L, lon, lat);
     row(L.entry.title, "", "sub");
     if (i < 0 || j < 0) { row("cell", "outside this grid"); continue; }
     const t = plan.tt.index;
@@ -714,6 +722,123 @@ function drawProfile(L, li, lj, kOn) {
   g.strokeStyle = "#ff7ab8"; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(m.l, Y(P.z[kOn])); g.lineTo(W - m.r, Y(P.z[kOn])); g.stroke(); g.setLineDash([]);
 }
 
+// ---------------------------------------------------------------- series
+
+// Every active surface layer with a time axis, against time at the picked
+// point, over state.series years around the date: each layer's own time
+// steps (at most SERIES_MAX of them, evenly spaced), one cell each, read
+// through the shared cache (a window already decoded for drawing gives its
+// value without a read). A sea ice layer (one that clears below its range)
+// marks its edge, and with a second layer the page says when the ice fell
+// through the edge and when the other layer peaked before the ice came
+// back (src/core/series.js).
+const SERIES_MAX = 120, SERIES_PAR = 6, SERIES_COLOURS = ["#9fd8ff", "#7ee07e", "#ffb454", "#ff7ab8", "#c9a7ff"];
+let seriesTicket = 0;
+const isEdge = (L) => L.entry.below === "clear" && Array.isArray(L.entry.range);
+async function cellValue(L, t, i, j) {
+  const P = L.parts, w = P.w;
+  if (w && reader.how(L.ds, t, P.k, w) === "cache") {
+    const v = await reader.slab(L.ds, t, P.k, w), nx = w[3] - w[2];
+    if (j >= w[0] && j < w[1] && i >= w[2] && i < w[3]) return v[(j - w[0]) * nx + (i - w[2])];
+  }
+  const v = await reader.slab(L.ds, t, P.k ?? null, [j, j + 1, i, i + 1]);
+  return v[0];
+}
+async function pool(jobs, n) {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(n, jobs.length) }, async () => { while (next < jobs.length) await jobs[next++](); }));
+}
+async function showSeries() {
+  if (!pickAt) { ui.seriesNote.textContent = "click the globe or map first"; return; }
+  const ticket = ++seriesTicket, years = state.series || 1, mid = dateMs();
+  const t0 = mid - years * 365.25 * DAY / 2, t1 = mid + years * 365.25 * DAY / 2;
+  const todo = [];
+  for (const L of activeLayers()) {
+    if (!L.ds || !L.parts || L.failed || L.parts.rgba || L.entry.kind === "volume") continue;
+    const ax = L.ds.desc.axes;
+    if (!ax.t || !ax.t.dates) continue;
+    const [i, j] = cellAt(L, pickAt.lon, pickAt.lat);
+    if (i < 0 || j < 0) continue;
+    const idx = sampleIndices(ax.t.dates, t0, t1, { max: SERIES_MAX, keep: mid });
+    if (idx.length) todo.push({ L, i, j, idx, times: idx.map((t) => ax.t.dates[t]), values: new Float64Array(idx.length).fill(NaN), got: new Uint8Array(idx.length) });
+  }
+  ui.series.hidden = false; ui.seriesOff.hidden = false;
+  if (!todo.length) { ui.seriesNote.textContent = "no surface layer with a time axis covers this point"; drawSeries([], t0, t1, mid); return; }
+  const total = todo.reduce((a, s) => a + s.idx.length, 0), w0 = performance.now();
+  let done = 0, failed = 0, last = 0;
+  const tick = () => {
+    if (ticket !== seriesTicket) return;
+    ui.seriesNote.textContent = `reading ${done} of ${total} time steps\u2026`;
+    if (performance.now() - last > 250) { last = performance.now(); drawSeries(todo, t0, t1, mid); }
+  };
+  tick();
+  await Promise.all(todo.map((s) => pool(s.idx.map((t, q) => async () => {
+    if (ticket !== seriesTicket) return;
+    try { s.values[q] = await cellValue(s.L, t, s.i, s.j); s.got[q] = 1; } catch (e) { failed++; }
+    done++; tick();
+  }), SERIES_PAR)));
+  if (ticket !== seriesTicket) return;
+  drawSeries(todo, t0, t1, mid);
+  ui.seriesNote.textContent = seriesSummary(todo, mid) + ` Read ${total} time steps in ${(performance.now() - w0) / 1000 < 10 ? ((performance.now() - w0) / 1000).toFixed(1) : Math.round((performance.now() - w0) / 1000)} s${failed ? `, ${failed} failed` : ""}.`;
+}
+function seriesSummary(todo, mid) {
+  const ice = todo.find((s) => isEdge(s.L)), other = todo.find((s) => !isEdge(s.L));
+  if (!ice || !other) return "";
+  const edge = ice.L.entry.range[0];
+  const r = retreatToPeak(ice, other, { edge, around: mid });
+  if (!r) return `${ice.L.entry.title}: no fall below ${edge} in this span.`;
+  const u = other.L.entry.units ?? other.L.ds.desc.units ?? "";
+  return `Ice fell below ${edge} on ${F.isoDay(r.retreat)}` + (r.peak ? `; ${other.L.entry.id} peaked at ${fmt(r.peak.v)} ${u} on ${F.isoDay(r.peak.t)} (${r.lagDays >= 0 ? "+" : ""}${Math.round(r.lagDays)} d)` : `; ${other.L.entry.id} has no values after it`) +
+    (r.refreeze ? `, before the ice came back on ${F.isoDay(r.refreeze)}.` : ".");
+}
+function drawSeries(todo, t0, t1, mid) {
+  const c = ui.series, g = c.getContext("2d"), W = c.width, H = c.height, m = { l: 8, r: 8, t: 10, b: 24 };
+  const css = getComputedStyle(document.body), muted = (css.getPropertyValue("--muted") || "#999").trim() || "#999";
+  g.clearRect(0, 0, W, H);
+  const X = (t) => m.l + ((t - t0) / (t1 - t0)) * (W - m.l - m.r), Y = (f) => m.t + (1 - Math.max(0, Math.min(1, f))) * (H - m.t - m.b);
+  g.strokeStyle = muted; g.lineWidth = 1; g.strokeRect(m.l, m.t, W - m.l - m.r, H - m.t - m.b);
+  // years along the bottom
+  g.fillStyle = muted; g.font = "11px system-ui, sans-serif"; g.textAlign = "center";
+  const y0 = new Date(t0).getUTCFullYear(), y1 = new Date(t1).getUTCFullYear(), every = Math.max(1, Math.ceil((y1 - y0 + 1) / 6));
+  for (let y = y0; y <= y1 + 1; y++) {
+    const t = Date.UTC(y, 0, 1);
+    if (t < t0 || t > t1) continue;
+    g.beginPath(); g.moveTo(X(t), H - m.b); g.lineTo(X(t), H - m.b + 4); g.stroke();
+    if ((y - y0) % every === 0) g.fillText(String(y), X(t), H - 8);
+  }
+  g.strokeStyle = "#ff7ab8"; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(X(mid), m.t); g.lineTo(X(mid), H - m.b); g.stroke(); g.setLineDash([]);
+  ui.seriesKey.innerHTML = "";
+  todo.forEach((s, n) => {
+    const e = s.L.entry, col = SERIES_COLOURS[n % SERIES_COLOURS.length], edge = isEdge(s.L);
+    // each layer on its own scale: a sea ice layer from 0, a log layer on its log range
+    const fin = Array.from(s.values).filter((v) => v === v);
+    const range = edge ? [0, e.range[1]] : e.range || (fin.length ? [Math.min(...fin), Math.max(...fin)] : [0, 1]);
+    const pos = rampPos({ range: range[1] > range[0] ? range : [range[0], range[0] + 1], scale: e.scale });
+    if (edge) { g.strokeStyle = col; g.globalAlpha = 0.5; g.setLineDash([2, 4]); g.beginPath(); g.moveTo(m.l, Y(pos(e.range[0]))); g.lineTo(W - m.r, Y(pos(e.range[0]))); g.stroke(); g.setLineDash([]); g.globalAlpha = 1; }
+    g.strokeStyle = col; g.lineWidth = 1.5; g.beginPath();
+    let pen = false;
+    s.times.forEach((t, q) => {
+      let v = s.values[q];
+      if (v !== v) { if (!edge || !s.got[q]) { pen = false; return; } v = 0; }
+      const x = X(t), y = Y(pos(v));
+      if (pen) g.lineTo(x, y); else g.moveTo(x, y);
+      pen = true;
+    });
+    g.stroke();
+    const k = document.createElement("div"), sw = document.createElement("span");
+    sw.className = "sw"; sw.style.background = col;
+    k.append(sw, `${e.id}: ${fmtR(range[0])} to ${fmtR(range[1])} ${e.units ?? s.L.ds.desc.units ?? ""}${e.scale === "log10" ? ", log scale" : ""}${edge ? `, edge ${e.range[0]} dotted` : ""}`);
+    ui.seriesKey.append(k);
+  });
+}
+const fmtR = (v) => (Math.abs(v) >= 100 || v === Math.round(v) ? String(Math.round(v)) : String(+v.toPrecision(2)));
+ui.seriesGo.addEventListener("click", () => { state.series = +ui.seriesSpan.value; writeHash(); showSeries(); });
+ui.seriesSpan.addEventListener("change", () => { if (state.series) { state.series = +ui.seriesSpan.value; writeHash(); showSeries(); } });
+ui.seriesOff.addEventListener("click", () => {
+  seriesTicket++; state.series = 0; writeHash();
+  ui.series.hidden = true; ui.seriesOff.hidden = true; ui.seriesKey.innerHTML = ""; ui.seriesNote.textContent = "";
+});
+
 // ---------------------------------------------------------------- probe
 
 ui.probe.addEventListener("click", async () => {
@@ -754,6 +879,7 @@ async function start() {
   R.setRelay({ hosts: (registry.relay && registry.relay.hosts) || [], template: state.relay || (registry.relay && registry.relay.template) || null });
   // chunk reads close together in one file go as one request (#coalesce=0 to compare; read when a layer opens)
   R.setCoalescing(state.coalesce !== 0);
+  if ([1, 2, 4, 8].includes(state.series)) ui.seriesSpan.value = String(state.series);
   for (const e of registry.datasets) layers.set(e.id, newLayer(e));
   ui.credit.textContent = "OISST v2.1: NOAA NCEI. Sea ice: NOAA/NSIDC CDR G02202 v6. BRAN: CSIRO Bluelink, at NCI. IBCSO v2: Dorschel et al. (2022), doi:10.1594/PANGAEA.937574, CC BY 4.0. GEBCO 2026 Grid: GEBCO Compilation Group. Indexes and COG copies: raad.virtualize, on source.coop.";
   setCamera(state.cam || defaultCamera());
