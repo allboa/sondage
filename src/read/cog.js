@@ -16,15 +16,18 @@
 // is given (0 is full resolution). The description is the array's, with x
 // and y as that level's cell centres, so a page draws it like any Source.
 //
-// geotiff.js is loaded when a COG series is first opened, from the
-// "geotiff" import (an import map in a browser, node_modules in Node), and
+// geotiff.js is loaded when a COG series is first opened: the GeoTIFF
+// global when a page has loaded the browser build, else the "geotiff"
+// import (node_modules in Node), and
 // every read goes through countedFetch, so the host ledger counts it.
 
 import * as F from "../core/fourd.js";
 import { countedFetch, getJson } from "./hosts.js";
 
 let geotiffModule = null;
-const geotiff = () => (geotiffModule ||= import("geotiff"));
+// a page that loaded geotiff.js's browser build as a script has it as a
+// global (as the cutaway and basemap pages do); otherwise the import
+const geotiff = () => (geotiffModule ||= globalThis.GeoTIFF ? Promise.resolve(globalThis.GeoTIFF) : import("geotiff"));
 // Hand in a geotiff.js module (a page that has its own copy, or a test).
 export const setGeoTIFF = (m) => { geotiffModule = Promise.resolve(m); };
 
