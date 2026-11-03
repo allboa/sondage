@@ -31,12 +31,12 @@ const STEPS = ["day", "5day", "month", "year"];
 
 const defaults = {
   date: "2025-09-15", layers: "oisst-sst,g02202-south,bran-temp", box: "60,90,-70,-45",
-  lev: 30, zmax: 3, dz: 3, cl: 0.5, cp: 0.5, cut: 1, coast: 1, step: "day", base: "", view: "globe", t: 1, range: 20000, clon: null, clat: null, cam: null, iso: ""
+  lev: 30, zmax: 3, dz: 3, cl: 0.5, cp: 0.5, cut: 1, coast: 1, step: "day", base: "", relay: "", view: "globe", t: 1, range: 20000, clon: null, clat: null, cam: null, iso: ""
 };
 const state = { ...defaults };
 function readHash() {
   const num = (r) => (r === "" || !isFinite(+r) ? undefined : +r);
-  readParams(state, defaults, { date: (r) => (F.parseDay(r) !== null ? r : undefined), layers: String, box: String, base: String, iso: String, step: oneOf(STEPS, "day"),
+  readParams(state, defaults, { date: (r) => (F.parseDay(r) !== null ? r : undefined), layers: String, box: String, base: String, relay: String, iso: String, step: oneOf(STEPS, "day"),
     view: oneOf(["globe", "aeqd", "spilhaus"], "globe"), clon: num, clat: num });
   state.t = Math.max(0, Math.min(1, state.t));
   state.range = Math.max(100, Math.min(20000, state.range));
@@ -610,6 +610,8 @@ async function start() {
     registry = await (await fetch(new URL("../data/fourd/stores.json", import.meta.url))).json();
   } catch (e) { ui.status.textContent = "could not read data/fourd/stores.json"; return; }
   baseUrl = state.base || registry.base;
+  // hosts with no CORS header are read through the relay (#relay= overrides the file's)
+  R.setRelay({ hosts: (registry.relay && registry.relay.hosts) || [], template: state.relay || (registry.relay && registry.relay.template) || null });
   for (const e of registry.datasets) layers.set(e.id, newLayer(e));
   ui.credit.textContent = "OISST v2.1: NOAA NCEI. Sea ice: NOAA/NSIDC CDR G02202 v6. BRAN: CSIRO Bluelink, at NCI. Indexes: raad.virtualize, on source.coop.";
   setCamera(state.cam || defaultCamera());

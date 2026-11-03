@@ -27,7 +27,7 @@ import { IcechunkStore } from "icechunk-js";
 import * as zarr from "zarrita";
 import * as F from "../core/fourd.js";
 import { knownProj4 } from "../core/structure.js";
-import { fetchClient, getJson } from "./hosts.js";
+import { fetchClient, getJson, setRelay } from "./hosts.js";
 import { openStore, describeVariable, nodeMeta, read1d } from "./store.js";
 import { openCogSeries } from "./cog.js";
 
@@ -176,10 +176,13 @@ export async function openSource(entry, base) {
 
 // The registry file (data/fourd/stores.json and its like) or the object
 // itself, as { base, datasets, probe, entry(id), open(id) }. A base given
-// here wins over the file's (the page's #base= key).
-export async function openRegistry(where, { base = null } = {}) {
+// here wins over the file's (the page's #base= key), and so does a relay
+// template (#relay=) over the file's relay.template; the relay is set for
+// every read from then on (hosts.js setRelay).
+export async function openRegistry(where, { base = null, relay = null } = {}) {
   const reg = typeof where === "string" ? await getJson(where) : where;
   const b = base || reg.base;
+  setRelay({ hosts: (reg.relay && reg.relay.hosts) || [], template: relay || (reg.relay && reg.relay.template) || null });
   const byId = new Map([...(reg.datasets || []), ...(reg.probe || [])].map((e) => [e.id, e]));
   const entry = (id) => { const e = byId.get(id); if (!e) throw new Error(`no dataset ${id} in the registry`); return e; };
   return { base: b, datasets: reg.datasets || [], probe: reg.probe || [], entry, open: (id) => openSource(entry(id), b) };

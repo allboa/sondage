@@ -1,6 +1,8 @@
 {
   "about": "Datasets for the 4D page. base is the one place the index's home is named: when a group moves to its own repository, change base, or give that entry its own base. A #base= hash key overrides it for a session. iso_step spaces the contour lines (iso mode); a layer that clears below its range also gets a line at the low end, the ice edge. form cog reads one COG per time step (listed by the dataset's STAC items) at the overview nearest width cells wide; stamp start says each time stamp opens its period (monthly composites); scale log10 spaces the palette over the logs of the range.",
   "base": "https://s3.us-west-2.amazonaws.com/us-west-2.opendata.source.coop/ausantarctic/ausantarctic-scratch",
+  "relay": { "template": null, "hosts": ["projects.pawsey.org.au", "noaadata.apps.nsidc.org"],
+    "about": "Hosts that send no CORS header, read through a relay when template is set (or a #relay= hash key gives one): {url} in the template is the original URL, {encoded} the URL encoded as a query value, and with neither the URL is appended. The relay must pass Range headers. Reads are still counted under the original host." },
   "datasets": [
     { "id": "oisst-sst", "title": "OISST sea surface temperature", "path": "oisst/oisst-v2.1-daily", "var": "sst",
       "kind": "surface", "palette": "viridis", "range": [-2, 30], "iso_step": 2, "lift": 0 },
