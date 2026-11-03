@@ -5,12 +5,11 @@
   "type": "module",
   "exports": {
     "./core": "./src/core/index.js",
-    "./scene": "./src/scene/index.js",
-    "./read": "./js/fourd-read.js",
-    "./read/store": "./js/store-read.js"
+    "./read": "./src/read/index.js",
+    "./scene": "./src/scene/index.js"
   },
   "scripts": {
-    "test": "node test/check-pure.mjs && node test/check-scene.mjs && node test/check-fourd.mjs && node test/check-cutaway.mjs && node test/check-storecrs.mjs && node test/check-structure.mjs && node test/check-chunkgrid.mjs && node test/check-geoid.mjs && node test/check-rhumb.mjs && node test/check-spilhaus.mjs && node test/check-azimuthal.mjs",
+    "test": "node test/check-pure.mjs && node test/check-scene.mjs && node test/check-fourd.mjs && node test/check-cutaway.mjs && node test/check-storecrs.mjs && node test/check-read.mjs && node test/check-structure.mjs && node test/check-chunkgrid.mjs && node test/check-geoid.mjs && node test/check-rhumb.mjs && node test/check-spilhaus.mjs && node test/check-azimuthal.mjs",
     "serve": "python3 -m http.server 8000"
   },
   "devDependencies": {

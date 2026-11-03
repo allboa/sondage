@@ -110,7 +110,7 @@ const server = http.createServer((req, res) => {
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const base = `http://127.0.0.1:${server.address().port}`;
 
-const R = await import("../js/store-read.js");
+const R = await import("../src/read/store.js");
 const man = JSON.parse(fs.readFileSync(path.join(root, "manifest.json")));
 for (const t of man.stores) {
   let s, v;

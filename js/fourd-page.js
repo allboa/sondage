@@ -13,7 +13,7 @@
 
 import * as THREE from "three";
 import * as F from "../src/core/fourd.js";
-import * as R from "./fourd-read.js";
+import * as R from "../src/read/index.js";
 import { PALETTES, rampAt } from "../src/core/palette.js";
 import { loadCoastline } from "./data.js";
 import * as spilhaus from "../src/core/families/spilhaus.js";
@@ -367,7 +367,13 @@ function newLayer(entry) {
 
 async function openLayer(L) {
   if (L.ds) return L.ds;
-  if (!L.opening) L.opening = R.openDataset(L.entry, baseUrl).then((ds) => { L.ds = ds; buildParts(L); return ds; },
+  if (!L.opening) L.opening = R.openDataset(L.entry, baseUrl).then((ds) => {
+    L.ds = ds;
+    // a store described by its own metadata names its CRS itself
+    if (!L.entry.crs && ds.desc.crs) L.entry = { ...L.entry, crs: ds.desc.crs };
+    buildParts(L);
+    return ds;
+  },
     (e) => { L.error = e.message || String(e); L.opening = null; throw e; });
   return L.opening;
 }

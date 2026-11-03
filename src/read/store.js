@@ -1,5 +1,7 @@
-// Reading a Zarr or Icechunk store for the store page: open it, list its
+// Reading any Zarr or Icechunk store by its own metadata: open it, list its
 // arrays, and describe where one variable's cells are and in which CRS.
+// source.js turns that description into a Source; the store explorer
+// (playproj store.html) uses it directly.
 //
 // Icechunk repositories are read with icechunk-js (EarthyScience), plain
 // Zarr with zarrita's FetchStore; both give zarrita an AsyncReadable, as in
@@ -8,8 +10,9 @@
 
 import { IcechunkStore } from "icechunk-js";
 import * as zarr from "zarrita";
-import { zarrStructure, parseCrsRef } from "../src/core/structure.js";
-import { cfProj, axisRole, axisOf, unitScale, gridOf, LAT_NAMES, LON_NAMES } from "../src/core/storecrs.js";
+import { zarrStructure, parseCrsRef } from "../core/structure.js";
+import { countedFetch, fetchClient, maybeJson } from "./hosts.js";
+import { cfProj, axisRole, axisOf, unitScale, gridOf, LAT_NAMES, LON_NAMES } from "../core/storecrs.js";
 
 const ICECHUNK = "icechunk+";
 const dec = new TextDecoder();
@@ -30,7 +33,7 @@ export function httpUrl(url) {
 export const looksIcechunk = (url) => url.startsWith(ICECHUNK) || /\.icechunk\/?$/.test(url.split(/[?#]/)[0]);
 
 async function tryIcechunk(url) {
-  try { return await IcechunkStore.open(url); } catch (e) { return null; }
+  try { return await IcechunkStore.open(url, { fetchClient }); } catch (e) { return null; }
 }
 
 // Open url as Icechunk (a repository root, maybe followed by a group path,
@@ -41,8 +44,8 @@ export async function openStore(raw) {
   const forceIce = looksIcechunk(raw);
   let ice = null, group = "";
   // a Zarr store answers with metadata at its root; an Icechunk one does not
-  const zj = forceIce ? null : await fetchJson(url + "/zarr.json");
-  const zm = forceIce || zj ? null : await fetchJson(url + "/.zmetadata");
+  const zj = forceIce ? null : await maybeJson(url + "/zarr.json");
+  const zm = forceIce || zj ? null : await maybeJson(url + "/.zmetadata");
   if (!zj && !zm) {
     const parts = url.split("/");
     for (let i = parts.length; i >= 4 && !ice; i--) {
@@ -65,10 +68,10 @@ export async function openStore(raw) {
       .map((a) => ({ ...a, path: group ? a.path.slice(group.length + 1) : a.path }));
     return { kind: "icechunk", url, group, root: ice, store, getJson, arrays, open: (p) => zarr.open(ice.resolve("/" + join(group, p)), { kind: "array" }) };
   }
-  const fs = new zarr.FetchStore(url);
+  const fs = new zarr.FetchStore(url, { fetch: (req) => countedFetch(req) });
   const cache = new Map();
   const getJson = async (p) => {
-    if (!cache.has(p)) cache.set(p, fetchJson(url + "/" + p));
+    if (!cache.has(p)) cache.set(p, maybeJson(url + "/" + p));
     return cache.get(p);
   };
   const arrays = () => {
@@ -125,13 +128,6 @@ export function openFiles(files) {
   };
 }
 
-async function fetchJson(url) {
-  let r;
-  try { r = await fetch(url); } catch (e) { return null; }
-  if (!r.ok) return null;
-  try { return await r.json(); } catch (e) { return null; }
-}
-
 // the arrays worth showing: two or more dimensions, biggest first
 export function dataArrays(list) {
   return list.filter((a) => a.shape && a.shape.length >= 2)
@@ -139,7 +135,7 @@ export function dataArrays(list) {
 }
 
 // metadata of one node, v2 or v3, as { shape, chunks, inner, dims, attrs, dtype, codecs, fill }
-async function nodeMeta(s, path) {
+export async function nodeMeta(s, path) {
   const j = await s.getJson(join(path, "zarr.json"));
   if (j) {
     if (j.node_type !== "array") return { group: true, attrs: j.attributes || {} };
@@ -168,7 +164,7 @@ const unwrapped = (vals, lon) => {
 };
 
 // read a small 1D array whole
-async function read1d(s, path, max = 1e6) {
+export async function read1d(s, path, max = 1e6) {
   const m = await nodeMeta(s, path);
   if (!m || m.group || !m.shape || m.shape.length !== 1 || m.shape[0] > max) return null;
   const a = await s.open(path);
