@@ -11,3 +11,4 @@ export { drawLocator, ortho, cssRamp } from "./locator.js";
 export { sceneFrame } from "../core/geo.js";
 export { makeFrame, toVec, fromVec, aeqd, VIEWS } from "./frame.js";
 export { makeTexture, cutout, paint, cssStops } from "./paint.js";
+export { surfaceLayer, volumeLayer, paintLayer, isoLayer, clearGroup, lonLatOf } from "./layers.js";
