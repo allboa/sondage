@@ -12,7 +12,7 @@ import * as THREE from "three";
 import * as C from "../src/core/cutaway.js";
 import * as GE from "../src/core/geoid.js";
 import { loadScript } from "./basemap-load.js";
-import { makeStage, readParams, hashWriter, shareLinks, oneOf } from "../src/scene/index.js";
+import { makeStage, readParams, hashWriter, shareLinks, oneOf, drawBlock as drawCut, paintBands, sectionLine, INK } from "../src/scene/index.js";
 
 const proj4 = window.proj4;
 proj4.defs("EPSG:3031", "+proj=stere +lat_0=-90 +lat_ts=-71 +lon_0=0 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs");
@@ -21,9 +21,6 @@ const toLL = (x, y) => proj4("EPSG:3031", "EPSG:4326", [x, y]);
 const $ = (id) => document.getElementById(id);
 const DEG = "\u00b0";
 const GEOTIFF_JS = "https://cdn.jsdelivr.net/npm/geotiff@3.0.5/dist-browser/geotiff.js";
-const INK = { rock: "#7a6552", water: "#1d5f9e", ice: "#e3f0fb", sky: "#05070d", bed: "#3a2c20", surface: "#ffffff", base: "#9cc8ec",
-  rema: "#ffb347", gebco: "#7fe0ff", unc: "rgba(255,211,77,0.22)", ground: "#ff7ab8", grid: "rgba(160,200,255,0.16)", text: "#c4cedb" };
-
 // ---------------------------------------------------------------- state
 
 // w, side, curve and site left empty take the preset's own (or the usual)
@@ -211,43 +208,7 @@ async function build() {
 // and ice as filled runs, then the surface, base and bed lines. rows have
 // s (metres along) and l (a layer). Shared by the panel's section and the
 // faces of the block, so the two always agree.
-function paintBands(g, rows, floor, top, X, Y) {
-  const st = rows.map((r) => C.stack(r.l, floor));
-  for (const [band, ink] of [["rock", INK.rock], ["water", INK.water], ["ice", INK.ice]]) {
-    g.fillStyle = ink;
-    let run = [];
-    const flush = () => {
-      if (run.length > 1) {
-        g.beginPath();
-        run.forEach((i, k) => (k ? g.lineTo(X(rows[i].s), Y(st[i][band][1])) : g.moveTo(X(rows[i].s), Y(st[i][band][1]))));
-        for (let k = run.length - 1; k >= 0; k--) g.lineTo(X(rows[run[k]].s), Y(st[run[k]][band][0]));
-        g.closePath(); g.fill();
-      }
-      run = [];
-    };
-    rows.forEach((r, i) => (st[i] ? run.push(i) : flush()));
-    flush();
-  }
-  // the ice base under floating ice, a fine line
-  g.strokeStyle = INK.base; g.lineWidth = 1;
-  g.beginPath();
-  let pen = false;
-  rows.forEach((r) => {
-    if (r.l.kind === "floating") { const x = X(r.s), y = Y(r.l.base); pen ? g.lineTo(x, y) : g.moveTo(x, y); pen = true; } else pen = false;
-  });
-  g.stroke();
-}
-
-function line(g, rows, get, X, Y, ink, width = 1.5, dash = []) {
-  g.strokeStyle = ink; g.lineWidth = width; g.setLineDash(dash);
-  g.beginPath();
-  let pen = false;
-  for (const r of rows) {
-    const v = get(r);
-    if (v === v && v !== undefined) { pen ? g.lineTo(X(r.s), Y(v)) : g.moveTo(X(r.s), Y(v)); pen = true; } else pen = false;
-  }
-  g.stroke(); g.setLineDash([]);
-}
+const line = sectionLine;
 
 let hoverS = null;
 function drawSection() {
@@ -462,113 +423,9 @@ const ve = () => (state.ve > 0 ? state.ve : current ? C.autoExaggeration(current
 // towards -z), y up (km, exaggerated); flat, or bent over the Earth
 const posOf = (s, t, m) => C.place(s, t, m * ve(), { curve: current.curve, cs: current.f.L / 2, ct: (current.blk.t0 + current.blk.t1) / 2 });
 
-function clearBlock() {
-  for (const o of [...block.children]) {
-    block.remove(o); o.geometry.dispose();
-    if (o.material.map) o.material.map.dispose();
-    o.material.dispose();
-  }
-}
-
-// a surface over the block's grid: height(l) in metres or NaN, colour(l)
-// as [r, g, b] in 0..1; triangles only where all three corners have height
-function surface(heightOf, colourOf, material) {
-  const { grid, nu, nv } = current, n = grid.length;
-  const pos = new Float32Array(n * 3), col = new Float32Array(n * 3), ok = new Uint8Array(n);
-  grid.forEach((g, k) => {
-    const h = heightOf(g.l);
-    if (h === h) { ok[k] = 1; pos.set(posOf(g.s, g.t, h), 3 * k); col.set(colourOf(g.l, h), 3 * k); }
-  });
-  const idx = [];
-  for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) {
-    const a = j * (nu + 1) + i, b = a + 1, c = a + nu + 1, d = c + 1;
-    if (ok[a] && ok[b] && ok[d]) idx.push(a, b, d);
-    if (ok[a] && ok[d] && ok[c]) idx.push(a, d, c);
-  }
-  if (!idx.length) return null;
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-  geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
-  geo.setIndex(idx);
-  geo.computeVertexNormals();
-  const mesh = new THREE.Mesh(geo, material);
-  block.add(mesh);
-  return mesh;
-}
-
-// one side of the block: a vertical rectangle from p (s, t) to q, from the
-// floor to the top, painted with the section along it (sky transparent)
-function face(rows, s0, t0, s1, t1) {
-  const { floor, top } = current;
-  const cv = document.createElement("canvas");
-  cv.width = 1024; cv.height = 512;
-  const g = cv.getContext("2d"), len = Math.hypot(s1 - s0, t1 - t0) || 1;
-  const along = (r) => Math.hypot(r.s0 - s0, r.t0 - t0);
-  const rr = rows.map((r) => ({ s: along(r), l: r.l }));
-  paintBands(g, rr, floor, top, (d) => (d / len) * cv.width, (z) => ((top - z) / (top - floor)) * cv.height);
-  const tex = new THREE.CanvasTexture(cv);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  // a strip, bottom and top at each step, so a curved block bends with it
-  const n = current.curve ? 96 : 1, pos = [], uv = [], idx = [];
-  for (let q = 0; q <= n; q++) {
-    const u = q / n, s = s0 + (s1 - s0) * u, t = t0 + (t1 - t0) * u;
-    pos.push(...posOf(s, t, floor), ...posOf(s, t, top));
-    uv.push(u, 0, u, 1);
-    if (q) idx.push(2 * q - 2, 2 * q, 2 * q + 1, 2 * q - 2, 2 * q + 1, 2 * q - 1);
-  }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute("position", new THREE.BufferAttribute(Float32Array.from(pos), 3));
-  geo.setAttribute("uv", new THREE.BufferAttribute(Float32Array.from(uv), 2));
-  geo.setIndex(idx);
-  block.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide })));
-}
-
-function bedColour(l, h) {
-  // where the ice was taken off, as the capvis renders had it
-  if (l.wasIce) return [0.4, 0.29, 0.2];
-  if (h < 0) { const d = Math.max(0, Math.min(1, -h / 3000)); return [0.35 - 0.25 * d, 0.5 - 0.3 * d, 0.62 - 0.25 * d]; }
-  const u = Math.max(0, Math.min(1, h / 3000));
-  return [0.48 + 0.3 * u, 0.4 + 0.3 * u, 0.32 + 0.3 * u];
-}
-
 function drawBlock() {
-  clearBlock();
-  if (!current) return;
-  const { grid, nu, nv, rows, f, blk } = current;
-  // the bed, everywhere
-  surface((l) => l.bed, bedColour, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
-  // the sea's surface over open water
-  surface((l) => (l.kind === "sea" ? 0 : NaN), () => [0.12, 0.38, 0.62], new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false }));
-  if (state.ice !== "off") {
-    const glass = state.ice === "glass";
-    const iceMat = () => new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, transparent: glass, opacity: glass ? 0.35 : 1, depthWrite: !glass });
-    surface((l) => (l.ice > 0 ? l.top : NaN), () => [0.92, 0.96, 1], iceMat());
-    surface((l) => (l.kind === "floating" ? l.base : NaN), () => [0.62, 0.78, 0.92], iceMat());
-  }
-  // the four sides: the cut along the line from the section itself, the
-  // others from the block's grid
-  const edge = (pick) => grid.filter(pick).map((g) => ({ s0: g.s, t0: g.t, l: g.l }));
-  face(rows.map((r) => ({ s0: r.s, t0: 0, l: r.l })), 0, 0, f.L, 0);
-  face(edge((g, k) => Math.floor(k / (nu + 1)) === nv), 0, blk.t1, f.L, blk.t1);
-  if (blk.t0 !== 0) face(edge((g, k) => Math.floor(k / (nu + 1)) === 0), 0, blk.t0, f.L, blk.t0);
-  face(edge((g, k) => k % (nu + 1) === 0), 0, blk.t0, 0, blk.t1);
-  face(edge((g, k) => k % (nu + 1) === nu), f.L, blk.t0, f.L, blk.t1);
-  drill();
+  drawCut(block, current, { ve: ve(), ice: state.ice });
   placePin();
-}
-
-// the drill: a red rod from the bed up through the surface, as thick as a
-// few hundredths of a percent of the block
-function drill() {
-  const st = current.site;
-  if (!st || st.l.bed !== st.l.bed) return;
-  const up = st.l.top === st.l.top ? st.l.top : 0, over = (current.top - current.floor) * 0.15;
-  const a = new THREE.Vector3(...posOf(st.s, st.t, st.l.bed)), b = new THREE.Vector3(...posOf(st.s, st.t, up + over));
-  const len = a.distanceTo(b), r = Math.max(current.f.L, Math.abs(current.blk.t1 - current.blk.t0)) / 1000 * 0.0025;
-  const rod = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 12), new THREE.MeshBasicMaterial({ color: 0xff2a2a }));
-  rod.position.copy(a).add(b).multiplyScalar(0.5);
-  rod.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
-  block.add(rod);
 }
 
 function defaultCamera() {
