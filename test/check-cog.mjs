@@ -66,6 +66,9 @@ ok(R.chooseLevel([[8640, 4320], [4320, 2160]], { level: 9 }) === 1, "chooseLevel
   }
   const v2 = await s.read(2, 0, 4, 6, 10, 12);
   ok(Math.abs(v2[0] / at(40, 2) - 1) < 1e-5, `a window at t 2: ${v2[0]} vs ${at(40, 2)}`);
+  const st = R.readStats.get(v2);
+  ok(st && st.shared === false && st.tiles >= 1 && st.reads >= 1 && st.bytes > 0 && st.ms >= st.rasterMs, `read stats: ${JSON.stringify(st)}`);
+  ok(st && st.decodeMs >= 0 && st.unpackMs >= 0 && typeof st.opened === "boolean", "read stats: decode, unpack, opened");
   const miss = await s.read(1, 0, 0, 2, 0, 2);
   ok(miss.length === 4 && miss.every((x) => Number.isNaN(x)), "a month with no file reads as NaN");
   const host = R.hosts.get(new URL(base).host);

@@ -105,6 +105,13 @@
     </section>
 
     <section>
+      <div class="row"><span>Timing</span><button id="copy-timing" type="button" class="small">Copy timings</button></div>
+      <p id="timing-sum" class="hint" role="status"></p>
+      <table class="readout" id="timing"><tbody></tbody></table>
+      <p class="hint">The last date shown, per layer: how its window was got (read now, joined a read ahead already running, or from the cache), the wait for it in ms, its size, and painting its texture and contour lines in ms. Hover a row for requests, decoding and file opening; the button copies the last 50 dates as JSON.</p>
+    </section>
+
+    <section>
       <div class="buttons">
         <button id="probe" type="button" class="small">Test the data hosts</button>
         <button id="reset-view" type="button" class="small">Reset view</button>

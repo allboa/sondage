@@ -6,10 +6,21 @@
 
 // Per host: { ok, fail, bytes, ms, error }.
 export const hosts = new Map();
+// Every read so far, all hosts: { reads, bytes, ms } (ms summed over reads,
+// so with reads in parallel it exceeds the wall time).
+export const totals = { reads: 0, bytes: 0, ms: 0 };
+
+// What a read cost, by the values it returned: { ms, reads, bytes, shared }
+// and, for a COG series, open, fetch, decode and unpack ms (cog.js). When
+// shared is true, reads and bytes are what every host served while it ran,
+// so reads in parallel share them; a COG series counts its own exactly. A
+// page reads it with readStats.get(values).
+export const readStats = new WeakMap();
 const hostOf = (url) => { try { return new URL(url).host; } catch (e) { return String(url); } };
 function note(url, fields) {
   const h = hostOf(url), s = hosts.get(h) || { ok: 0, fail: 0, bytes: 0, ms: 0, error: "" };
-  if (fields.ok) { s.ok++; s.bytes += fields.bytes || 0; s.ms = fields.ms; } else { s.fail++; s.error = fields.error; }
+  if (fields.ok) { s.ok++; s.bytes += fields.bytes || 0; s.ms = fields.ms; totals.reads++; totals.bytes += fields.bytes || 0; totals.ms += fields.ms || 0; }
+  else { s.fail++; s.error = fields.error; }
   hosts.set(h, s);
 }
 let onFetch = null;

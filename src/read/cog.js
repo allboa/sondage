@@ -22,7 +22,7 @@
 // every read goes through countedFetch, so the host ledger counts it.
 
 import * as F from "../core/fourd.js";
-import { countedFetch, getJson } from "./hosts.js";
+import { countedFetch, getJson, readStats } from "./hosts.js";
 
 let geotiffModule = null;
 // a page that loaded geotiff.js's browser build as a script has it as a
@@ -31,27 +31,39 @@ const geotiff = () => (geotiffModule ||= globalThis.GeoTIFF ? Promise.resolve(gl
 // Hand in a geotiff.js module (a page that has its own copy, or a test).
 export const setGeoTIFF = (m) => { geotiffModule = Promise.resolve(m); };
 
-// geotiff.js's client interface over countedFetch.
+// geotiff.js's client interface over countedFetch, keeping its own count
+// (tally: reads, bytes, and ms summed over requests, to the body's end).
 class CountedClient {
-  constructor(url) { this.url = url; }
+  constructor(url) { this.url = url; this.tally = { reads: 0, bytes: 0, ms: 0 }; }
   async request({ headers, signal } = {}) {
-    const r = await countedFetch(this.url, { headers, signal });
-    return { ok: r.ok, status: r.status, getHeader: (n) => r.headers.get(n) || undefined, getData: () => r.arrayBuffer() };
+    const t0 = performance.now(), r = await countedFetch(this.url, { headers, signal }), T = this.tally;
+    return { ok: r.ok, status: r.status, getHeader: (n) => r.headers.get(n) || undefined,
+      getData: async () => { const b = await r.arrayBuffer(); T.reads++; T.bytes += b.byteLength; T.ms += performance.now() - t0; return b; } };
   }
 }
 
-// Each file's pyramid, finest first: { tiff, images }. Opening reads only
-// the header and IFDs. Kept per URL, the most recent few.
+// A decoder "pool" for readRasters that decodes on this thread, as
+// geotiff.js does with no pool, and sums the time it takes into acc.ms.
+function timedDecoders(GT, acc) {
+  if (!GT.getDecoder) return null;
+  return { bindParameters: (compression, params) => ({
+    decode: async (slice) => { const d = await GT.getDecoder(compression, params), t0 = performance.now(); const r = await d.decode(slice); acc.ms += performance.now() - t0; acc.n++; return r; }
+  }) };
+}
+
+// Each file's pyramid, finest first: { tiff, images, client, GT }. Opening
+// reads only the header and IFDs. Kept per URL, the most recent few.
 const opened = new Map();
 const OPEN_MAX = 48;
 export function openCog(url) {
   if (opened.has(url)) { const p = opened.get(url); opened.delete(url); opened.set(url, p); return p; }
   const p = (async () => {
     const GT = await geotiff();
-    const tiff = await GT.fromCustomClient(new CountedClient(url), { cacheSize: 64 });
+    const client = new CountedClient(url);
+    const tiff = await GT.fromCustomClient(client, { cacheSize: 64 });
     const n = await tiff.getImageCount(), images = [];
     for (let i = 0; i < n; i++) images.push(await tiff.getImage(i));
-    return { tiff, images };
+    return { tiff, images, client, GT };
   })();
   p.catch(() => opened.delete(url));
   opened.set(url, p);
@@ -128,14 +140,26 @@ export async function openCogSeries(entry, base) {
   const read = async (t, k, y0, y1, x0, x1) => {
     const n = (y1 - y0) * (x1 - x0), url = files[t];
     if (!url) return new Float32Array(n).fill(NaN);
-    const { images: ims } = await openCog(url);
+    // what this read costs: opening the file (its header, unless open
+    // already), fetching tiles, decoding them, and unpacking to values
+    const wasOpen = opened.has(url), t0 = performance.now();
+    const { images: ims, client, GT } = await openCog(url);
+    // a file opened by this read counts its header reads too
+    const t1 = performance.now(), c0 = wasOpen ? { ...client.tally } : { reads: 0, bytes: 0, ms: 0 }, dec = { ms: 0, n: 0 };
     const img = ims[Math.min(level, ims.length - 1)];
-    const raw = await img.readRasters({ window: [x0, y0, x1, y1], samples: [0], interleave: true });
-    const v = F.unpack(raw, { ...desc, fill: desc.fill ?? nodata }, { valid: entry.valid || null });
-    if (!Array.isArray(k)) return v;
-    const out = new Float32Array((k[1] - k[0]) * n);
-    for (let q = 0; q < k[1] - k[0]; q++) out.set(v, q * n);
-    return out;
+    const raw = await img.readRasters({ window: [x0, y0, x1, y1], samples: [0], interleave: true, pool: timedDecoders(GT, dec) });
+    const t2 = performance.now();
+    let v = F.unpack(raw, { ...desc, fill: desc.fill ?? nodata }, { valid: entry.valid || null });
+    if (Array.isArray(k)) {
+      const out = new Float32Array((k[1] - k[0]) * n);
+      for (let q = 0; q < k[1] - k[0]; q++) out.set(v, q * n);
+      v = out;
+    }
+    const T = client.tally;
+    readStats.set(v, { shared: false, file: url.split("/").pop(), level, opened: !wasOpen, openMs: t1 - t0,
+      reads: T.reads - c0.reads, bytes: T.bytes - c0.bytes, fetchMs: T.ms - c0.ms, rasterMs: t2 - t1,
+      tiles: dec.n, decodeMs: dec.ms, unpackMs: performance.now() - t2 });
+    return v;
   };
   return { kind: "cog", entry, desc, meta, urls, files, level, read };
 }
