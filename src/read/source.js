@@ -27,7 +27,7 @@ import { IcechunkStore } from "icechunk-js";
 import * as zarr from "zarrita";
 import * as F from "../core/fourd.js";
 import { knownProj4 } from "../core/structure.js";
-import { fetchClient, getJson, setRelay } from "./hosts.js";
+import { fetchClient, getJson, setRelay, totals, readStats } from "./hosts.js";
 import { openStore, describeVariable, nodeMeta, read1d } from "./store.js";
 import { openCogSeries } from "./cog.js";
 
@@ -56,6 +56,15 @@ function transpose(v, desc, k, ny, nx) {
 
 // The parts every Source shares.
 function finish(src) {
+  const raw = src.read;
+  src.read = async (...a) => {
+    const t0 = performance.now(), r0 = totals.reads, b0 = totals.bytes;
+    const v = await raw(...a);
+    const own = readStats.get(v) || {};
+    // reads and bytes: what every host served meanwhile, unless the Source counted its own
+    readStats.set(v, { reads: totals.reads - r0, bytes: totals.bytes - b0, shared: true, ...own, ms: performance.now() - t0 });
+    return v;
+  };
   const { desc } = src;
   // an entry may say how its time stamps sit in their periods (fourd.js timeAt)
   if (src.entry && src.entry.stamp && desc.axes.t) desc.axes.t.stamp = src.entry.stamp;
@@ -209,5 +218,8 @@ export function makeReader({ budget = 256 * 2 ** 20 } = {}) {
     return p;
   }
   const cached = (ds, t, k, w) => cache.has(key(ds, t, k, w));
-  return { slab, cached, cache };
+  // "cache" (decoded already), "joined" (a read in flight, as a read ahead
+  // starts one) or "read" (a new read)
+  const how = (ds, t, k, w) => { const kk = key(ds, t, k, w); return cache.has(kk) ? "cache" : inflight.has(kk) ? "joined" : "read"; };
+  return { slab, cached, how, cache };
 }

@@ -70,7 +70,8 @@ const ui = {
   dz: $("dz"), dzOut: $("dz-out"), cl: $("cl"), clOut: $("cl-out"), cp: $("cp"), cpOut: $("cp-out"),
   pick: $("pick-table").tBodies[0], profile: $("profile"), pickHint: $("pick-hint"),
   view: $("view"), t: $("t"), tOut: $("t-out"), range: $("range"), rangeOut: $("range-out"), centrePick: $("centre-pick"), centreBox: $("centre-box"),
-  probe: $("probe"), reset: $("reset-view"), hosts: $("hosts").tBodies[0], status: $("status"), credit: $("credit")
+  probe: $("probe"), reset: $("reset-view"), hosts: $("hosts").tBodies[0], status: $("status"), credit: $("credit"),
+  timing: $("timing").tBodies[0], timingSum: $("timing-sum"), copyTiming: $("copy-timing")
 };
 
 const dayOf = (ms) => Math.floor(ms / DAY);
@@ -225,12 +226,16 @@ function surfaceMask(L) {
   return m;
 }
 
+// colour a layer's parts from its values; returns { paintMs, isoMs }
 function applyData(L, values) {
   const P = L.parts;
-  if (!P) return;
+  if (!P) return null;
+  const t0 = performance.now();
   const mask = P.kind === "surface" ? surfaceMask(L) : null;
   paintLayer(P, values, L.entry, mask);
+  const t1 = performance.now();
   isoLayer(frame, P, values, L.entry, isoOf(L.entry.id), mask);
+  return { paintMs: t1 - t0, isoMs: performance.now() - t1 };
 }
 
 // The same array in gridlook, and in this site's store explorer, at a time
@@ -271,20 +276,24 @@ let showing = 0;
 // cache when it is there), and paint all of them together once all have
 // answered, so a frame is never half one date and half another.
 async function show() {
-  const ticket = ++showing, ms = dateMs();
+  const ticket = ++showing, ms = dateMs(), t0 = performance.now();
   ui.date.value = dayOf(ms); ui.dateOut.textContent = state.date; ui.dateText.value = state.date;
   const todo = activeLayers();
   for (const L of layers.values()) if (!todo.includes(L)) { L.group.visible = false; L.visible = false; }
   ui.loading.textContent = "reading\u2026";
   const results = await Promise.allSettled(todo.map(async (L) => {
+    const o0 = performance.now();
     await openLayer(L);
+    const openMs = performance.now() - o0;
     if (!L.parts) throw new Error(L.error || "not drawn");
     const plan = readPlan(L, ms);
     if (!plan || plan.outside) return { L, outside: true };
+    const how = reader.how(L.ds, plan.tt.index, plan.k, plan.w), w0 = performance.now();
     const values = await reader.slab(L.ds, plan.tt.index, plan.k, plan.w);
-    return { L, plan, values };
+    return { L, plan, values, how, openMs, waitMs: performance.now() - w0 };
   }));
-  if (ticket !== showing) return false;
+  if (ticket !== showing) { timing.superseded++; return false; }
+  const tRead = performance.now();
   const needBase = [];
   results.forEach((r, i) => {
     const L = todo[i];
@@ -310,12 +319,92 @@ async function show() {
     L.status = `${F.isoDay(plan.tt.date)}${Math.abs(off) >= 1 ? ` (${off > 0 ? "+" : ""}${off.toFixed(0)} d)` : ""}, step ${plan.tt.index}`;
   });
   buildBase();
-  for (const L of todo) if (L.visible) applyData(L, L.shown.values);
+  const painted = new Map();
+  for (const L of todo) if (L.visible) painted.set(L, applyData(L, L.shown.values));
+  const tPaint = performance.now();
   ui.loading.textContent = "";
   renderLayers(); renderHosts(); refreshPick();
+  recordFrame(state.date, results, todo, painted, { t0, tRead, tPaint });
   prefetch(ms);
   return true;
 }
+
+// ---------------------------------------------------------------- timing
+
+// Each frame shown: how long from asking for a date to its pixels, split
+// into waiting for reads, painting textures and contours, and drawing, with
+// what each layer's read cost (src/read readStats). The last frames are
+// kept in window.__fourd.timings (reads ahead in timing.ahead) and the Copy button puts them on the
+// clipboard as JSON.
+const timing = { frames: [], superseded: 0, lastRender: 0, ahead: [] };
+const KEEP = 200;
+const r1 = (x) => (x == null ? null : Math.round(x * 10) / 10);
+function recordFrame(date, results, todo, painted, { t0, tRead, tPaint }) {
+  const rec = { date, at: new Date().toISOString(), superseded: timing.superseded, waitMs: r1(tRead - t0), paintMs: r1(tPaint - tRead), layers: [] };
+  timing.superseded = 0;
+  results.forEach((r, i) => {
+    const L = todo[i], v = r.status === "fulfilled" ? r.value : null;
+    const row = { id: L.entry.id, ok: !!(v && v.values) };
+    if (v && v.values) {
+      const st = R.readStats.get(v.values) || {}, pz = painted.get(L) || {};
+      Object.assign(row, { t: v.plan.tt.index, how: v.how, waitMs: r1(v.waitMs), openMs: v.openMs > 1 ? r1(v.openMs) : 0,
+        readMs: r1(st.ms), reads: st.reads, mb: st.bytes != null ? +(st.bytes / 2 ** 20).toFixed(2) : null, shared: st.shared,
+        fetchMs: r1(st.fetchMs), tiles: st.tiles, decodeMs: r1(st.decodeMs), unpackMs: r1(st.unpackMs), fileOpenMs: st.opened ? r1(st.openMs) : null,
+        paintMs: r1(pz.paintMs), isoMs: r1(pz.isoMs), cells: v.values.length });
+    } else if (r.status === "rejected") row.error = String(r.reason?.message || r.reason);
+    rec.layers.push(row);
+  });
+  // drawing: the next two frames' render time, and when the pixels are up
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    rec.drawMs = r1(timing.lastRender); rec.totalMs = r1(performance.now() - t0);
+    timing.frames.push(rec);
+    if (timing.frames.length > KEEP) timing.frames.shift();
+    renderTiming();
+  }));
+}
+
+// how many of the next AHEAD steps of each layer are decoded already
+function aheadReady() {
+  let ready = 0, all = 0, t = dateMs();
+  for (let s = 0; s < AHEAD; s++) {
+    t = F.stepFrom(t, state.step, 1);
+    for (const L of activeLayers()) {
+      if (!L.ds || !L.parts || L.failed) continue;
+      const plan = readPlan(L, t);
+      if (!plan || plan.outside) continue;
+      all++; if (reader.how(L.ds, plan.tt.index, plan.k, plan.w) === "cache") ready++;
+    }
+  }
+  return { ready, all };
+}
+
+function renderTiming() {
+  const f = timing.frames.at(-1);
+  if (!f) return;
+  const fmt = (x) => (x == null ? "" : x >= 100 ? Math.round(x) : x.toFixed(1));
+  const a = aheadReady();
+  ui.timingSum.textContent = `${f.date}: on screen in ${fmt(f.totalMs)} ms (waiting for data ${fmt(f.waitMs)}, painting ${fmt(f.paintMs)}, drawing ${fmt(f.drawMs)})` +
+    `${f.superseded ? `; ${f.superseded} earlier date${f.superseded > 1 ? "s" : ""} dropped before it` : ""}. Read ahead: ${a.ready} of the next ${a.all} ready.`;
+  const T = ui.timing;
+  T.innerHTML = "";
+  const head = ["Layer", "Got", "Wait", "MB", "Paint"];
+  const tr0 = document.createElement("tr");
+  for (const h of head) { const td = document.createElement("td"); td.textContent = h; tr0.append(td); }
+  T.append(tr0);
+  for (const l of f.layers) {
+    const tr = document.createElement("tr");
+    const cells = l.ok ? [l.id, l.how, fmt(l.waitMs), l.mb, fmt((l.paintMs || 0) + (l.isoMs || 0))] : [l.id, "failed", "", "", ""];
+    for (const c of cells) { const td = document.createElement("td"); td.textContent = c ?? ""; tr.append(td); }
+    if (l.ok) tr.title = `time step ${l.t}, ${l.cells} cells; read ${fmt(l.readMs)} ms, ${l.reads} requests; paint ${fmt(l.paintMs)} ms, lines ${fmt(l.isoMs)} ms` + (l.fetchMs != null ? `; fetch ${fmt(l.fetchMs)} ms summed over ${l.reads} requests, ${l.tiles} tiles, decode ${fmt(l.decodeMs)} ms, unpack ${fmt(l.unpackMs)} ms${l.fileOpenMs != null ? `, file header ${fmt(l.fileOpenMs)} ms` : ""}` : "") +
+      (l.how !== "read" ? " (the read ran earlier, ahead of this date)" : "") + (l.shared ? "; reads and MB are every host's while it ran" : "");
+    T.append(tr);
+  }
+}
+ui.copyTiming.addEventListener("click", async () => {
+  const txt = JSON.stringify({ page: location.href, frames: timing.frames.slice(-50), ahead: timing.ahead.slice(-50), hosts: Object.fromEntries(R.hosts), totals: R.totals }, null, 1);
+  try { await navigator.clipboard.writeText(txt); ui.copyTiming.textContent = "Copied"; } catch (e) { console.log(txt); ui.copyTiming.textContent = "In the console"; }
+  setTimeout(() => { ui.copyTiming.textContent = "Copy timings"; }, 1500);
+});
 
 // read ahead: the next few dates of every active layer, one at a time
 let fetching = 0;
@@ -329,7 +418,16 @@ async function prefetch(ms) {
       if (!L.ds || !L.parts || L.failed) continue;
       const plan = readPlan(L, t);
       if (!plan || plan.outside) continue;
-      try { await reader.slab(L.ds, plan.tt.index, plan.k, plan.w); } catch (e) { /* shown when it is the date */ }
+      const how = reader.how(L.ds, plan.tt.index, plan.k, plan.w), t0 = performance.now();
+      try {
+        const v = await reader.slab(L.ds, plan.tt.index, plan.k, plan.w);
+        if (how === "read") {
+          const st = R.readStats.get(v) || {};
+          timing.ahead.push({ id: L.entry.id, date: F.isoDay(t), t: plan.tt.index, ms: Math.round(performance.now() - t0), mb: st.bytes != null ? +(st.bytes / 2 ** 20).toFixed(2) : null, reads: st.reads, decodeMs: st.decodeMs != null ? Math.round(st.decodeMs) : null });
+          if (timing.ahead.length > KEEP) timing.ahead.shift();
+          renderTiming();
+        }
+      } catch (e) { /* shown when it is the date */ }
     }
   }
 }
@@ -619,12 +717,14 @@ async function start() {
   renderControls(); renderLayers();
   await openActive();
   await show();
-  window.__fourd = { state, layers, reader, hosts: R.hosts, ready: true };
+  window.__fourd = { state, layers, reader, hosts: R.hosts, timings: timing.frames, ready: true };
 }
 
 function tick() {
   controls.update();
+  const r0 = performance.now();
   renderer.render(world, camera);
+  timing.lastRender = performance.now() - r0;
   requestAnimationFrame(tick);
 }
 requestAnimationFrame(tick);
