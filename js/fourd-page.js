@@ -383,7 +383,7 @@ function renderLayers() {
       const t2 = document.createElement("tr"), c = document.createElement("td");
       c.colSpan = 2; c.className = "hint"; c.style.textAlign = "left";
       const u = L.entry.units ?? (L.ds ? L.ds.desc.units : "");
-      c.append(`colour ${L.entry.range[0]} to ${L.entry.range[1]} ${u}${L.entry.below === "clear" ? ", clear below" : ""} `);
+      c.append(`colour ${L.entry.range[0]} to ${L.entry.range[1]} ${u}${L.entry.scale === "log10" ? ", log scale" : ""}${L.entry.below === "clear" ? ", clear below" : ""} `);
       const sel = document.createElement("select");
       sel.setAttribute("aria-label", `${L.entry.title}: fill, contour lines or both`);
       for (const m of ISO) { const o = document.createElement("option"); o.value = m; o.textContent = m === "fill" ? "fill" : m === "lines" ? "lines" : "fill + lines"; sel.append(o); }

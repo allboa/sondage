@@ -1,0 +1,2 @@
+{"type": "Feature", "id": "chl-0.tif", "properties": {"datetime": "2024-01-01T00:00:00Z", "rv:placement": {"chlor_a": {"dest": [0, 0, 0], "count": [1, 64, 128]}}}, "assets": {"data": {"href": "../../cog/chl-0.tif", "type": "image/tiff; application=geotiff"}}}
+{"type": "Feature", "id": "chl-2.tif", "properties": {"datetime": "2024-03-01T00:00:00Z", "rv:placement": {"chlor_a": {"dest": [2, 0, 0], "count": [1, 64, 128]}}}, "assets": {"data": {"href": "../../cog/chl-2.tif", "type": "image/tiff; application=geotiff"}}}

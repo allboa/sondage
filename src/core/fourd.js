@@ -98,10 +98,24 @@ export function nearestIndex(sorted, v) {
 }
 
 // The time index of a layer for a date in ms, with its own date and how far
-// that is from the date asked for (days).
+// that is from the date asked for (days). A time axis with stamp "start"
+// has each date at the start of the period it covers (a monthly composite
+// stamped on the first of its month): a date takes the period it falls in,
+// at no offset, and lies outside before the first or after the last
+// period's end (taken as one typical step).
 export function timeAt(desc, ms) {
   const ax = desc.axes.t;
   if (!ax) return { index: null, date: null, offsetDays: 0, outside: false };
+  if (ax.stamp === "start") {
+    const d = ax.dates, n = d.length;
+    let lo = 0, hi = n - 1;
+    if (ms <= d[0]) hi = 0;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (d[mid] <= ms) lo = mid; else hi = mid; }
+    const index = ms >= d[hi] ? hi : lo;
+    const last = n > 1 ? d[n - 1] + (d[n - 1] - d[0]) / (n - 1) : d[0] + DAY;
+    const outside = ms < d[0] || ms >= last;
+    return { index, date: d[index], offsetDays: outside ? (d[index] - ms) / DAY : 0, outside };
+  }
   const { index, outside } = nearestIndex(ax.dates, ms);
   return { index, date: ax.dates[index], offsetDays: (ax.dates[index] - ms) / DAY, outside };
 }
@@ -308,11 +322,16 @@ export function syntheticOcean({ start = Date.UTC(2024, 0, 1), days = 1096, dx =
 
 // Contour levels for a value range: n even steps across it, ends left out,
 // plus the low end itself when values below it are cleared (so the edge of
-// the drawn field, such as a 15% sea ice edge, is one of the lines).
-export function isoLevels([lo, hi], { n = 10, step = null, edge = false } = {}) {
+// the drawn field, such as a 15% sea ice edge, is one of the lines). With
+// log, a range above zero gets 1 and 3 times each power of ten inside it
+// (0.03, 0.1, 0.3, 1, ...), about evenly spaced along a log scale.
+export function isoLevels([lo, hi], { n = 10, step = null, edge = false, log = false } = {}) {
   const out = [];
   if (edge) out.push(lo);
-  if (step) { for (let v = Math.ceil(lo / step) * step; v < hi; v += step) if (v > lo + 1e-12) out.push(+v.toFixed(10)); }
+  if (log && lo > 0 && hi > lo) {
+    for (let e = Math.floor(Math.log10(lo)); e <= Math.ceil(Math.log10(hi)); e++)
+      for (const m of [1, 3]) { const v = +(m * 10 ** e).toPrecision(6); if (v > lo * (1 + 1e-9) && v < hi) out.push(v); }
+  } else if (step) { for (let v = Math.ceil(lo / step) * step; v < hi; v += step) if (v > lo + 1e-12) out.push(+v.toFixed(10)); }
   else for (let i = 1; i < n; i++) out.push(lo + ((hi - lo) * i) / n);
   return out;
 }

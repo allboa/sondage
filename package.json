@@ -9,11 +9,12 @@
     "./scene": "./src/scene/index.js"
   },
   "scripts": {
-    "test": "node test/check-pure.mjs && node test/check-scene.mjs && node test/check-frame.mjs && node test/check-layers.mjs && node test/check-fourd.mjs && node test/check-cutaway.mjs && node test/check-storecrs.mjs && node test/check-read.mjs && node test/check-structure.mjs && node test/check-chunkgrid.mjs && node test/check-geoid.mjs && node test/check-rhumb.mjs && node test/check-spilhaus.mjs && node test/check-azimuthal.mjs",
+    "test": "node test/check-pure.mjs && node test/check-scene.mjs && node test/check-frame.mjs && node test/check-layers.mjs && node test/check-fourd.mjs && node test/check-cutaway.mjs && node test/check-storecrs.mjs && node test/check-read.mjs && node test/check-cog.mjs && node test/check-structure.mjs && node test/check-chunkgrid.mjs && node test/check-geoid.mjs && node test/check-rhumb.mjs && node test/check-spilhaus.mjs && node test/check-azimuthal.mjs",
     "serve": "python3 -m http.server 8000"
   },
   "devDependencies": {
     "d3-geo": "3.1.1",
+    "geotiff": "^3.0.5",
     "icechunk-js": "0.6.0",
     "proj4": "2.12.1",
     "three": "0.160.0",
