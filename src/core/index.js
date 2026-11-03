@@ -8,6 +8,7 @@
 // helper names (windowOf, R, describe).
 
 export * as fourd from "./fourd.js";
+export * as series from "./series.js";
 export * as cutaway from "./cutaway.js";
 export * as mosaic from "./mosaic.js";
 export * as storecrs from "./storecrs.js";

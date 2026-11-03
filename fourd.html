@@ -31,7 +31,7 @@
   <aside id="panel">
     <header>
       <h1>sondage</h1>
-      <nav class="pages"><span class="group"><a href="./fourd.html" aria-current="page">Time and depth</a><a href="./cutaway.html">Cutaway</a></span><span class="group"><a href="https://github.com/hypertidy/playproj">playproj explainers</a></span></nav>
+      <nav class="pages"><span class="group"><a href="./fourd.html" aria-current="page">Time and depth</a><a href="./cutaway.html">Cutaway</a><a href="./ideas.html">Ideas</a></span><span class="group"><a href="https://github.com/hypertidy/playproj">playproj explainers</a></span></nav>
     </header>
 
     <section class="embed-keep">
@@ -102,6 +102,16 @@
       <table class="readout" id="pick-table"><tbody></tbody></table>
       <canvas id="profile" width="300" height="200" hidden aria-label="Profile against depth at the picked point"></canvas>
       <p id="pick-hint" class="hint">Click the globe for every layer's value there on this date, its cell and chunk, and the profile against depth for an ocean layer.</p>
+      <div class="row series-ctl">
+        <button id="series-go" type="button" class="small">Time series here</button>
+        <select id="series-span" aria-label="Span of the time series">
+          <option value="1">1 year</option><option value="2">2 years</option><option value="4">4 years</option><option value="8">8 years</option>
+        </select>
+        <button id="series-off" type="button" class="small" hidden>Hide</button>
+      </div>
+      <canvas id="series" width="300" height="200" hidden aria-label="Every surface layer against time at the picked point"></canvas>
+      <div id="series-key" class="series-key"></div>
+      <p id="series-note" class="hint"></p>
     </section>
 
     <section>
