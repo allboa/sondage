@@ -145,6 +145,22 @@ ok(R.chooseLevel([[8640, 4320], [4320, 2160]], { level: 9 }) === 1, "chooseLevel
   ok(lv.join() === "0.03,0.1,0.3,1,3,10", `log contour levels ${lv}`);
 }
 
+// the paint table: within one colour step of the exact ramp, ends and clears kept
+{
+  const { paint } = await import("../src/scene/paint.js");
+  const style = { palette: "chl", range: [0.01, 20], scale: "log10" }, col = palette({ name: "chl", ...style });
+  const vals = Float32Array.from([0.001, 0.01, 0.05, 0.3, 1, 4, 20, 500, NaN]);
+  const tex = { image: { width: vals.length, height: 1, data: new Uint8Array(vals.length * 4) } };
+  paint(tex, vals, style);
+  let worst = 0;
+  for (let i = 0; i < vals.length - 1; i++) { const c = col(vals[i]); for (let j = 0; j < 3; j++) worst = Math.max(worst, Math.abs(tex.image.data[4 * i + j] - c[j])); }
+  ok(worst <= 3, `paint table vs exact ramp: worst ${worst.toFixed(1)} of 255`);
+  ok(tex.image.data[4 * 8 + 3] === 0, "NaN is clear");
+  paint(tex, vals, { ...style, below: "clear" });
+  ok(tex.image.data[3] === 0 && tex.image.data[11] === 255, "below the range clears when asked");
+  ok(typeof R.setCoalescing === "function", "setCoalescing exported");
+}
+
 server.close();
 if (fails) { console.log(`${fails} failures`); process.exit(1); }
 console.log("cog: all checks passed");

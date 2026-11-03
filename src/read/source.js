@@ -161,6 +161,16 @@ export async function openUrl(url, path, entry = {}) {
 
 // ------------------------------------------------------------- the registry
 
+// Chunk reads that zarrita asks for together, from the same file, go as one
+// range request when they lie close (zarrita's withRangeCoalescing, through
+// icechunk-js): a month of chlorophyll tiles is 15 requests or 1. A host
+// that answers HTTP/1.1 lets a browser have about six requests open at
+// once, so on a slow host one long read can beat waves of short ones. On by
+// default; an entry's "coalesce": false, or openRegistry's coalesce, turns
+// it off (the 4D page's #coalesce=0, to compare).
+let coalescing = true;
+export const setCoalescing = (on) => { coalescing = !!on; };
+
 // A registry entry as a Source. base is the registry's base URL, for
 // entries named by path.
 export async function openSource(entry, base) {
@@ -180,7 +190,8 @@ export async function openSource(entry, base) {
   const urls = F.storeUrls(entry.base || base, entry);
   const meta = await getJson(urls.arrays);
   const desc = F.describe(meta, entry.var);
-  const store = await IcechunkStore.open(urls.icechunk, { fetchClient });
+  const join = entry.coalesce ?? coalescing;
+  const store = await IcechunkStore.open(urls.icechunk, { fetchClient, ...(join && { withRangeCoalescing: zarr.withRangeCoalescing }) });
   const arr = await zarr.open(zarr.root(store).resolve(entry.var), { kind: "array" });
   return finish({ kind: "icechunk", entry, desc, meta, urls, read: readerOf(arr, desc, entry) });
 }
@@ -190,7 +201,8 @@ export async function openSource(entry, base) {
 // here wins over the file's (the page's #base= key), and so does a relay
 // template (#relay=) over the file's relay.template; the relay is set for
 // every read from then on (hosts.js setRelay).
-export async function openRegistry(where, { base = null, relay = null } = {}) {
+export async function openRegistry(where, { base = null, relay = null, coalesce = null } = {}) {
+  if (coalesce != null) coalescing = !!coalesce;
   const reg = typeof where === "string" ? await getJson(where) : where;
   const b = base || reg.base;
   setRelay({ hosts: (reg.relay && reg.relay.hosts) || [], template: relay || (reg.relay && reg.relay.template) || null });
