@@ -1,0 +1,23 @@
+<!doctype html><html><head><meta charset="utf-8"><title>sondage: a block from made-up layers</title>
+<!-- drawBlock() on its own: a line, a block beside it and a layering at every sample, all made up here, so it draws with no data. The cutaway page builds the same cut from Bedmap3, REMA and GEBCO. -->
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+</head><body style="margin:0;background:#05070d"><div id="three" style="width:900px;height:600px"></div>
+<script type="module">
+import * as THREE from "three";
+import * as C from "../src/core/cutaway.js";
+import { makeStage, drawBlock } from "../src/scene/index.js";
+const { scene, setCamera, renderer, camera, controls } = makeStage(document.getElementById("three"), { bg: 0x05070d, fov: 35, near: 0.1, far: 5000 });
+scene.add(new THREE.AmbientLight(0xffffff, 0.8)); const dl = new THREE.DirectionalLight(0xffffff, 1.2); dl.position.set(1, 2, 1); scene.add(dl);
+const f = C.lineFrame([0, 0], [200000, 0]), blk = C.blockOf(f, 80000, 1);
+const surf = (s) => 2000 - s / 120, bed = (s, t) => 500 - s / 40 - 300 * Math.sin(t / 15000);
+const L = (s, t) => { const b = bed(s, t), sf = surf(s); const h = sf > 0 ? Math.max(0, sf - Math.max(b, 0)) : 0; return C.layer(sf > 0 ? sf : NaN, h, b, s > 150000 ? 3 : s > 180000 ? 0 : 1); };
+const nu = 40, nv = 16, grid = [];
+for (let j = 0; j <= nv; j++) for (let i = 0; i <= nu; i++) { const s = f.L * i / nu, t = blk.t0 + (blk.t1 - blk.t0) * j / nv; grid.push({ s, t, l: L(s, t) }); }
+const rows = Array.from({ length: 201 }, (_, i) => ({ s: f.L * i / 200, l: L(f.L * i / 200, 0) }));
+const cut = { f, blk, rows, grid, nu, nv, floor: -6000, top: 2600, curve: false, site: { s: 60000, t: 20000, l: L(60000, 20000) } };
+const group = new THREE.Group(); scene.add(group);
+drawBlock(group, cut, { ve: 10, ice: "glass" });
+window.parts = group.children.length;
+setCamera([70, 120, 260, 100, 0, -40]);
+(function tick() { controls.update(); renderer.render(scene, camera); requestAnimationFrame(tick); })();
+</script></body></html>
