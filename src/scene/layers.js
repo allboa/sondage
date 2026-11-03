@@ -11,13 +11,14 @@
 //
 //   const P = surfaceLayer(frame, group, desc, style, { crs, proj4 });
 //   paintLayer(P, values, style);
+//   reliefLayer(frame, P, values, 20);  // a topography lifted by its values
 //   const P = volumeLayer(frame, group, desc, style, { box, zmax, lev, cl, cp, exag });
 //   const w = P.w;          // the read window [y0, y1, x0, x1], levels P.k
 
 import * as THREE from "three";
 import * as F from "../core/fourd.js";
 import { PALETTES, rampAt, rampPos } from "../core/palette.js";
-import { makeTexture, cutout, paint } from "./paint.js";
+import { makeTexture, cutout, paint, paintRGBA } from "./paint.js";
 
 const axisAt = F.coordAt;
 
@@ -43,6 +44,9 @@ export function clearGroup(frame, group) {
 // steps (so several surfaces stack). opts: crs (a proj4 string, or none
 // for longitude and latitude), proj4, and tag (set as each mesh's
 // userData.layer, for picking).
+// style.clip_lat clears every cell north of that latitude (a chart's
+// neatline); style.relief asks for a finer mesh, for reliefLayer(). An
+// image description (desc.rgba) paints its own colours.
 export function surfaceLayer(frame, group, desc, style, { crs = null, proj4 = null, tag = null } = {}) {
   const ax = desc.axes;
   if (!ax.x || !ax.y) return { error: "no horizontal axes" };
@@ -50,8 +54,10 @@ export function surfaceLayer(frame, group, desc, style, { crs = null, proj4 = nu
   const nx = ax.x.n, ny = ax.y.n, w = [0, ny, 0, nx];
   const tex = makeTexture(nx, ny);
   const lift = 1 + 0.0012 * (1 + (style.lift || 0));
-  const nu = Math.min(nx, crs ? 120 : 360), nv = Math.min(ny, crs ? 120 : 180);
-  const geo = frame.gridGeometry(nu, nv, (u, v) => { const [lon, lat] = toLonLat(axisAt(ax.x, u * nx), axisAt(ax.y, v * ny)); return [lon, lat, lift]; });
+  const fine = style.relief ? 3 : 1;
+  const nu = Math.min(nx, (crs ? 120 : 360) * fine), nv = Math.min(ny, (crs ? 120 : 180) * fine);
+  const at = (rOf) => (u, v) => { const [lon, lat] = toLonLat(axisAt(ax.x, u * nx), axisAt(ax.y, v * ny)); return [lon, lat, rOf(u, v)]; };
+  const geo = frame.gridGeometry(nu, nv, at(() => lift));
   const mesh = new THREE.Mesh(geo, cutout(tex));
   mesh.userData.layer = tag;
   group.add(mesh);
@@ -61,10 +67,36 @@ export function surfaceLayer(frame, group, desc, style, { crs = null, proj4 = nu
     const [lon, lat] = toLonLat(ax.x.values[i], ax.y.values[j]);
     centres[(j * nx + i) * 2] = lon === null ? NaN : lon; centres[(j * nx + i) * 2 + 1] = lat === null ? NaN : lat;
   }
+  let clip = null;
+  if (style.clip_lat !== undefined && style.clip_lat !== null) {
+    clip = new Uint8Array(nx * ny);
+    for (let q = 0; q < clip.length; q++) { const lat = centres[2 * q + 1]; clip[q] = lat === lat && lat <= style.clip_lat ? 0 : 1; }
+  }
   // contours run through cell centres; a mask hides cells as the fill does
-  const iso = [{ w: nx, h: ny, at: (values, mask) => (i, j) => { const q = j * nx + i; return mask && mask[q] ? NaN : values[q]; },
-    place: (x, y) => [...toLonLat(axisAt(ax.x, x + 0.5), axisAt(ax.y, y + 0.5)), lift + 0.0003] }];
-  return { kind: "surface", w, k: 0, tex, mesh, centres, toLonLat, nx, ny, fills: [mesh], iso, group };
+  const P = { kind: "surface", w, k: 0, tex, mesh, centres, toLonLat, nx, ny, fills: [mesh], group, lift, nu, nv, at, clip, rgba: !!desc.rgba,
+    rAt: () => lift };
+  P.iso = [{ w: nx, h: ny, at: (values, mask) => (i, j) => { const q = j * nx + i; return (mask && mask[q]) || (clip && clip[q]) ? NaN : values[q]; },
+    place: (x, y) => [...toLonLat(axisAt(ax.x, x + 0.5), axisAt(ax.y, y + 0.5)), P.rAt((x + 0.5) / nx, (y + 0.5) / ny) + 0.0003] }];
+  return P;
+}
+
+// A surface layer's mesh lifted by its own values (metres, up positive) times
+// exag: sea floor below the sphere, land and ice above it. Each vertex takes
+// the value of the cell it falls in; a cell with no value stays at the
+// layer's height. Contours follow (P.rAt). Call again with new values or a
+// new exaggeration; exag 0 lays it flat.
+export function reliefLayer(frame, P, values, exag) {
+  const s = exag / F.EARTH_R, { nx, ny, lift } = P;
+  const cell = (u, v) => {
+    const i = Math.min(nx - 1, Math.max(0, Math.floor(u * nx))), j = Math.min(ny - 1, Math.max(0, Math.floor(v * ny)));
+    return values[j * nx + i];
+  };
+  P.rAt = (u, v) => { const z = cell(u, v); return z === z ? lift + z * s : lift; };
+  const old = P.mesh.geometry;
+  P.mesh.geometry = frame.gridGeometry(P.nu, P.nv, P.at(P.rAt));
+  frame.drop(old);
+  P.relief = exag;
+  return P;
 }
 
 // A box of the grid down to a depth. opts: box [lon0, lon1, lat0, lat1],
@@ -134,7 +166,11 @@ export function volumeLayer(frame, group, desc, style, { crs = null, box, zmax, 
 // Colour a layer's parts from values read over its window (levels by rows
 // by columns for a volume); mask hides surface cells.
 export function paintLayer(P, values, style, mask = null) {
-  if (P.kind === "surface") { paint(P.tex, values, style, undefined, mask); return; }
+  if (P.kind === "surface") {
+    const m = P.clip && mask ? P.clip.map((c, i) => c | mask[i]) : (P.clip || mask);
+    if (P.rgba) paintRGBA(P.tex, values, m); else paint(P.tex, values, style, undefined, m);
+    return;
+  }
   const { nx, ny, lev } = P, n = nx * ny;
   paint(P.shellTex, values, style, (i) => values[lev * n + i]);
   for (const q of P.sections) {

@@ -15,7 +15,7 @@ import * as THREE from "three";
 import * as F from "../src/core/fourd.js";
 import * as R from "../src/read/index.js";
 import { loadCoastline } from "./data.js";
-import { makeStage, readParams, hashWriter, shareLinks, oneOf, makeFrame, makeTexture, cutout, cssStops, surfaceLayer, volumeLayer, paintLayer, isoLayer, clearGroup } from "../src/scene/index.js";
+import { makeStage, readParams, hashWriter, shareLinks, oneOf, makeFrame, makeTexture, cutout, cssStops, surfaceLayer, volumeLayer, paintLayer, isoLayer, reliefLayer, clearGroup } from "../src/scene/index.js";
 import { hashString } from "../src/core/storecrs.js";
 
 const proj4 = window.proj4;
@@ -31,7 +31,7 @@ const STEPS = ["day", "5day", "month", "year"];
 
 const defaults = {
   date: "2025-09-15", layers: "oisst-sst,g02202-south,bran-temp", box: "60,90,-70,-45",
-  lev: 30, zmax: 3, dz: 3, cl: 0.5, cp: 0.5, cut: 1, coast: 1, step: "day", base: "", relay: "", view: "globe", t: 1, range: 20000, clon: null, clat: null, cam: null, iso: ""
+  lev: 30, zmax: 3, dz: 3, rz: 1.3, cl: 0.5, cp: 0.5, cut: 1, coast: 1, step: "day", base: "", relay: "", view: "globe", t: 1, range: 20000, clon: null, clat: null, cam: null, iso: ""
 };
 const state = { ...defaults };
 function readHash() {
@@ -42,6 +42,7 @@ function readHash() {
   state.range = Math.max(100, Math.min(20000, state.range));
   state.zmax = Math.max(1, Math.min(3.7, state.zmax));
   state.dz = Math.max(0, Math.min(3, state.dz));
+  state.rz = Math.max(0, Math.min(2.5, state.rz));
   state.cl = Math.max(0, Math.min(1, state.cl));
   state.cp = Math.max(0, Math.min(1, state.cp));
   state.lev = Math.max(0, Math.round(state.lev));
@@ -53,6 +54,7 @@ readHash();
 // "both"; the hash keeps the others as id:mode,id:mode
 const ISO = ["fill", "lines", "both"];
 function isoOf(id) {
+  if (layers.get(id)?.parts?.rgba) return "fill";
   for (const p of state.iso.split(",")) { const [k, m] = p.split(":"); if (k === id && ISO.includes(m)) return m; }
   return "fill";
 }
@@ -67,7 +69,7 @@ const ui = {
   date: $("date"), dateOut: $("date-out"), dateText: $("date-text"), play: $("play"), back: $("back"), fwd: $("fwd"), step: $("step"),
   loading: $("loading"), layers: $("layers").tBodies[0], cut: $("cut"), coast: $("coast"),
   box: $("box"), boxGo: $("box-go"), lev: $("lev"), levOut: $("lev-out"), zmax: $("zmax"), zmaxOut: $("zmax-out"),
-  dz: $("dz"), dzOut: $("dz-out"), cl: $("cl"), clOut: $("cl-out"), cp: $("cp"), cpOut: $("cp-out"),
+  dz: $("dz"), dzOut: $("dz-out"), rz: $("rz"), rzOut: $("rz-out"), cl: $("cl"), clOut: $("cl-out"), cp: $("cp"), cpOut: $("cp-out"),
   pick: $("pick-table").tBodies[0], profile: $("profile"), pickHint: $("pick-hint"),
   view: $("view"), t: $("t"), tOut: $("t-out"), range: $("range"), rangeOut: $("range-out"), centrePick: $("centre-pick"), centreBox: $("centre-box"),
   probe: $("probe"), reset: $("reset-view"), hosts: $("hosts").tBodies[0], status: $("status"), credit: $("credit")
@@ -75,6 +77,9 @@ const ui = {
 
 const dayOf = (ms) => Math.floor(ms / DAY);
 const exag = () => 10 ** state.dz;
+// topography relief: its own exaggeration, since the ocean's (exag) would
+// lift land thousands of km
+const rexag = () => 10 ** state.rz;
 const zmaxM = () => 10 ** state.zmax;
 function parseBox(s) {
   const b = String(s).split(",").map(Number);
@@ -133,9 +138,12 @@ const inBox = (lon, lat) => {
 // ---------------------------------------------------------------- base globe
 
 // an opaque sphere just under the surface layers (land shows through where a
-// layer has no data), cut open over the box so the ocean below shows
+// layer has no data), cut open over the box so the ocean below shows; with
+// a topography in relief it sits below the deepest trench at that relief
 let base = null;
+const reliefOn = () => activeLayers().some((L) => L.entry.relief && L.visible);
 function buildBase() {
+  const r = reliefOn() ? 1 - (11500 * rexag()) / F.EARTH_R : 0.998;
   if (base) { root.remove(base); dropGeometry(base.geometry); base.material.map.dispose(); }
   const w = 720, h = 360, tex = makeTexture(w, h), d = tex.image.data;
   const c = new THREE.Color(COLORS.base);
@@ -146,7 +154,7 @@ function buildBase() {
     d[o + 3] = state.cut && active && inBox(lon, lat) ? 0 : 255;
   }
   tex.needsUpdate = true;
-  base = new THREE.Mesh(gridGeometry(180, 90, (u, v) => [-180 + 360 * u, -90 + 180 * v, 0.998]), cutout(tex));
+  base = new THREE.Mesh(gridGeometry(180, 90, (u, v) => [-180 + 360 * u, -90 + 180 * v, r]), cutout(tex));
   base.renderOrder = 0;
   root.add(base);
 }
@@ -191,7 +199,10 @@ const spanOf = (L) => L.ds && L.ds.desc.axes.t ? [dayOf(L.ds.desc.axes.t.dates[0
 
 // what a layer reads for a date: its time index and the window
 function readPlan(L, ms) {
-  const d = L.ds.desc, tt = F.timeAt(d, ms);
+  const d = L.ds.desc;
+  // a layer with no time axis (a topography, a chart) is the same on every date
+  if (!d.axes.t) return { tt: { index: 0, date: null, offsetDays: 0 }, outside: false, k: L.parts.k, w: L.parts.w, still: true };
+  const tt = F.timeAt(d, ms);
   if (tt.index === null) return null;
   const outside = tt.outside || Math.abs(tt.offsetDays) > 3 * Math.max(1, typicalStep(d));
   return { tt, outside, k: L.parts.k, w: L.parts.w };
@@ -228,9 +239,14 @@ function surfaceMask(L) {
 function applyData(L, values) {
   const P = L.parts;
   if (!P) return;
-  const mask = P.kind === "surface" ? surfaceMask(L) : null;
+  const mask = P.kind === "surface" ? surfaceMask(L) : null, iso = isoOf(L.entry.id);
+  const relief = L.entry.relief ? rexag() : null;
+  // a still layer (no time axis) is painted again only when something changed
+  if (P.drawn && P.drawn.values === values && P.drawn.mask === mask && P.drawn.iso === iso && P.drawn.relief === relief) return;
+  if (relief !== null && (!P.drawn || P.drawn.values !== values || P.drawn.relief !== relief)) reliefLayer(frame, P, values, relief);
   paintLayer(P, values, L.entry, mask);
-  isoLayer(frame, P, values, L.entry, isoOf(L.entry.id), mask);
+  isoLayer(frame, P, values, L.entry, iso, mask);
+  P.drawn = { values, mask, iso, relief };
 }
 
 // The same array in gridlook, and in this site's store explorer, at a time
@@ -307,6 +323,7 @@ async function show() {
     L.visible = true; L.group.visible = true; L.shown = { values, plan };
     if (L.entry.kind === "volume" && !was) needBase.push(L);
     const off = plan.tt.offsetDays;
+    if (plan.still) { L.status = "every date (no time axis)"; return; }
     L.status = `${F.isoDay(plan.tt.date)}${Math.abs(off) >= 1 ? ` (${off > 0 ? "+" : ""}${off.toFixed(0)} d)` : ""}, step ${plan.tt.index}`;
   });
   buildBase();
@@ -372,18 +389,23 @@ function renderLayers() {
       openActive().then(show);
     });
     const sw = document.createElement("span");
-    sw.style.cssText = `display:inline-block;width:28px;height:8px;margin:0 6px;vertical-align:middle;background:linear-gradient(90deg,${cssStops(L.entry)})`;
+    sw.style.cssText = `display:inline-block;width:28px;height:8px;margin:0 6px;vertical-align:middle;background:${L.entry.range ? `linear-gradient(90deg,${cssStops(L.entry)})` : "repeating-linear-gradient(90deg,#d8d2c4 0 4px,#6fb0dc 4px 8px)"}`;
     lab.append(cb, sw, document.createTextNode(L.entry.title));
-    if (L.entry.crs_note) lab.title = L.entry.crs_note;
+    if (L.entry.crs_note || L.entry.note) lab.title = [L.entry.note, L.entry.crs_note].filter(Boolean).join("; ");
     a.append(lab); a.style.textAlign = "left";
     b.textContent = on.has(L.entry.id) ? (L.status || (L.ds ? "" : "opening\u2026")) : "";
     b.style.fontSize = "11px";
     tr.append(a, b); ui.layers.append(tr);
-    if (on.has(L.entry.id)) {
+    if (on.has(L.entry.id) && !L.entry.range) {
+      const t2 = document.createElement("tr"), c = document.createElement("td");
+      c.colSpan = 2; c.className = "hint"; c.style.textAlign = "left";
+      c.textContent = `in its own colours${L.entry.clip_lat != null ? `, cleared north of ${-L.entry.clip_lat}${DEG}S` : ""}`;
+      t2.append(c); ui.layers.append(t2);
+    } else if (on.has(L.entry.id)) {
       const t2 = document.createElement("tr"), c = document.createElement("td");
       c.colSpan = 2; c.className = "hint"; c.style.textAlign = "left";
       const u = L.entry.units ?? (L.ds ? L.ds.desc.units : "");
-      c.append(`colour ${L.entry.range[0]} to ${L.entry.range[1]} ${u}${L.entry.scale === "log10" ? ", log scale" : ""}${L.entry.below === "clear" ? ", clear below" : ""} `);
+      c.append(`colour ${L.entry.range[0]} to ${L.entry.range[1]} ${u}${L.entry.scale === "log10" ? ", log scale" : ""}${L.entry.below === "clear" ? ", clear below" : ""}${L.entry.relief ? ", in relief" : ""} `);
       const sel = document.createElement("select");
       sel.setAttribute("aria-label", `${L.entry.title}: fill, contour lines or both`);
       for (const m of ISO) { const o = document.createElement("option"); o.value = m; o.textContent = m === "fill" ? "fill" : m === "lines" ? "lines" : "fill + lines"; sel.append(o); }
@@ -415,6 +437,7 @@ function renderControls() {
   ui.box.value = state.box;
   ui.zmax.value = state.zmax; ui.zmaxOut.textContent = `${Math.round(zmaxM())} m`;
   ui.dz.value = state.dz; ui.dzOut.textContent = `x ${Math.round(exag())}`;
+  ui.rz.value = state.rz; ui.rzOut.textContent = `x ${Math.round(rexag())}`;
   ui.cl.value = state.cl; ui.cp.value = state.cp;
   ui.cut.checked = !!state.cut; ui.coast.checked = !!state.coast;
   ui.step.value = state.step;
@@ -454,6 +477,8 @@ ui.lev.addEventListener("input", () => { state.lev = +ui.lev.value; rebuildVolum
 ui.zmax.addEventListener("input", () => { ui.zmaxOut.textContent = `${Math.round(10 ** +ui.zmax.value)} m`; });
 ui.zmax.addEventListener("change", () => { state.zmax = +ui.zmax.value; rebuildVolumes(); show(); });
 ui.dz.addEventListener("input", () => { state.dz = +ui.dz.value; rebuildVolumes(); });
+ui.rz.addEventListener("input", () => { ui.rzOut.textContent = `x ${Math.round(10 ** +ui.rz.value)}`; });
+ui.rz.addEventListener("change", () => { state.rz = +ui.rz.value; writeHash(); show(); });
 ui.cl.addEventListener("input", () => { state.cl = +ui.cl.value; rebuildVolumes(); });
 ui.cp.addEventListener("input", () => { state.cp = +ui.cp.value; rebuildVolumes(); });
 ui.view.addEventListener("change", () => {
@@ -518,7 +543,8 @@ function refreshPick() {
   if (!pickAt) return;
   ui.pickHint.hidden = true;
   const lon = pickAt.lon, lat = pickAt.lat;
-  const depth = pickAt.r < 0.9995 ? (1 - pickAt.r) * F.EARTH_R / exag() : 0;
+  const vol = activeLayers().some((L) => L.entry.kind === "volume" && L.visible);
+  const depth = vol && pickAt.r < 0.9995 ? (1 - pickAt.r) * F.EARTH_R / exag() : 0;
   row("Point", `${lat.toFixed(2)}${DEG}, ${lon.toFixed(2)}${DEG}${depth > 1 ? `, ${depth.toFixed(0)} m down` : ""}`);
   for (const L of activeLayers()) {
     if (!L.visible || !L.shown) continue;
@@ -534,6 +560,7 @@ function refreshPick() {
     if (i < 0 || j < 0) { row("cell", "outside this grid"); continue; }
     const t = plan.tt.index;
     let v, k = null;
+    if (P.rgba) { const q = 4 * (j * P.nx + i); row("colour", `rgb(${vals[q]}, ${vals[q + 1]}, ${vals[q + 2]})`); continue; }
     if (P.kind === "surface") v = vals[j * P.nx + i];
     else {
       const li = i - P.w[2], lj = j - P.w[0];
@@ -613,7 +640,7 @@ async function start() {
   // hosts with no CORS header are read through the relay (#relay= overrides the file's)
   R.setRelay({ hosts: (registry.relay && registry.relay.hosts) || [], template: state.relay || (registry.relay && registry.relay.template) || null });
   for (const e of registry.datasets) layers.set(e.id, newLayer(e));
-  ui.credit.textContent = "OISST v2.1: NOAA NCEI. Sea ice: NOAA/NSIDC CDR G02202 v6. BRAN: CSIRO Bluelink, at NCI. Indexes: raad.virtualize, on source.coop.";
+  ui.credit.textContent = "OISST v2.1: NOAA NCEI. Sea ice: NOAA/NSIDC CDR G02202 v6. BRAN: CSIRO Bluelink, at NCI. IBCSO v2: Dorschel et al. (2022), doi:10.1594/PANGAEA.937574, CC BY 4.0. GEBCO 2026 Grid: GEBCO Compilation Group. Indexes and COG copies: raad.virtualize, on source.coop.";
   setCamera(state.cam || defaultCamera());
   resize();
   renderControls(); renderLayers();
