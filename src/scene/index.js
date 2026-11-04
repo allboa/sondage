@@ -11,5 +11,5 @@ export { drawLocator, ortho, cssRamp } from "./locator.js";
 export { sceneFrame } from "../core/geo.js";
 export { makeFrame, toVec, fromVec, aeqd, VIEWS } from "./frame.js";
 export { makeTexture, cutout, paint, paintRGBA, cssStops } from "./paint.js";
-export { surfaceLayer, volumeLayer, paintLayer, isoLayer, reliefLayer, clearGroup, lonLatOf } from "./layers.js";
+export { surfaceLayer, volumeLayer, paintLayer, isoLayer, reliefLayer, floorLayer, sampler, clearGroup, lonLatOf } from "./layers.js";
 export { drawBlock, clearBlock, paintBands, sectionLine, bedColour, placeIn, INK } from "./block.js";

@@ -17,7 +17,7 @@ import { sampleIndices, retreatToPeak } from "../src/core/series.js";
 import { rampPos } from "../src/core/palette.js";
 import * as R from "../src/read/index.js";
 import { loadCoastline } from "./data.js";
-import { makeStage, readParams, hashWriter, shareLinks, oneOf, makeFrame, makeTexture, cutout, cssStops, surfaceLayer, volumeLayer, paintLayer, isoLayer, reliefLayer, clearGroup } from "../src/scene/index.js";
+import { makeStage, readParams, hashWriter, shareLinks, oneOf, makeFrame, makeTexture, cutout, cssStops, surfaceLayer, volumeLayer, paintLayer, isoLayer, reliefLayer, floorLayer, sampler, clearGroup } from "../src/scene/index.js";
 import { hashString } from "../src/core/storecrs.js";
 
 const proj4 = window.proj4;
@@ -43,8 +43,8 @@ function readHash() {
   state.t = Math.max(0, Math.min(1, state.t));
   state.range = Math.max(100, Math.min(20000, state.range));
   state.zmax = Math.max(1, Math.min(3.7, state.zmax));
-  state.dz = Math.max(0, Math.min(3, state.dz));
-  state.rz = Math.max(0, Math.min(2.5, state.rz));
+  state.dz = Math.max(0, Math.min(4, state.dz));
+  state.rz = Math.max(0, Math.min(4, state.rz));
   state.cl = Math.max(0, Math.min(1, state.cl));
   state.cp = Math.max(0, Math.min(1, state.cp));
   state.lev = Math.max(0, Math.round(state.lev));
@@ -139,6 +139,36 @@ const inBox = (lon, lat) => {
   return l <= box[1] - box[0];
 };
 
+// ---------------------------------------------------------------- sea floor
+
+// Under the ocean box, the sea floor from the first topography in relief
+// that has values there, at the ocean's depth exaggeration (so the box's
+// shell and sections stand on it); depths past "Down to" lie on the box's
+// floor. Rebuilt only when the box, depth, exaggeration or topography change.
+const floorGroup = new THREE.Group();
+root.add(floorGroup);
+let floorKey = "";
+function buildFloor() {
+  const V = activeLayers().find((L) => L.entry.kind === "volume" && L.visible && L.parts);
+  const T = V && activeLayers().filter((L) => L.entry.relief && L.visible && L.shown && L.parts);
+  let pick = null;
+  if (T && T.length) {
+    const lon = (box[0] + box[1]) / 2, lat = (box[2] + box[3]) / 2;
+    for (const L of T) {
+      const f = sampler(L.ds.desc, L.shown.values, { crs: L.entry.crs, proj4 });
+      // the first whose grid reaches the box (its centre or a corner)
+      if ([[lon, lat], [box[0], box[2]], [box[1], box[3]], [box[0], box[3]], [box[1], box[2]]].some(([a, b]) => f(a, b) === f(a, b))) { pick = { L, f }; break; }
+    }
+  }
+  const key = pick ? [pick.L.entry.id, box.join(","), V.parts.nk, V.parts.edges[V.parts.nk], exag()].join("|") : "";
+  if (key === floorKey && (!pick || floorGroup.userData.values === pick.L.shown.values)) return;
+  floorKey = key;
+  clearGroup(frame, floorGroup);
+  floorGroup.userData.values = pick ? pick.L.shown.values : null;
+  if (!pick) return;
+  floorLayer(frame, floorGroup, pick.f, pick.L.entry, { box, exag: exag(), floor: V.parts.edges[V.parts.nk], tag: pick.L });
+}
+
 // ---------------------------------------------------------------- base globe
 
 // an opaque sphere just under the surface layers (land shows through where a
@@ -147,7 +177,7 @@ const inBox = (lon, lat) => {
 let base = null;
 const reliefOn = () => activeLayers().some((L) => L.entry.relief && L.visible);
 function buildBase() {
-  const r = reliefOn() ? 1 - (11500 * rexag()) / F.EARTH_R : 0.998;
+  const r = reliefOn() ? Math.max(0.05, 1 - (11500 * rexag()) / F.EARTH_R) : 0.998;
   if (base) { root.remove(base); dropGeometry(base.geometry); base.material.map.dispose(); }
   const w = 720, h = 360, tex = makeTexture(w, h), d = tex.image.data;
   const c = new THREE.Color(COLORS.base);
@@ -339,6 +369,7 @@ async function show() {
     L.status = `${F.isoDay(plan.tt.date)}${Math.abs(off) >= 1 ? ` (${off > 0 ? "+" : ""}${off.toFixed(0)} d)` : ""}, step ${plan.tt.index}`;
   });
   buildBase();
+  buildFloor();
   const painted = new Map();
   for (const L of todo) if (L.visible) painted.set(L, applyData(L, L.shown.values));
   const tPaint = performance.now();
@@ -572,6 +603,7 @@ function renderControls() {
 
 function rebuildVolumes() {
   for (const L of activeLayers()) if (L.ds && L.entry.kind === "volume") buildParts(L);
+  buildFloor();
   renderControls(); writeHash();
 }
 

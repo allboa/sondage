@@ -208,3 +208,42 @@ export function isoLayer(frame, P, values, style, mode, mask = null) {
   P.group.add(P.isoLines);
   return P.isoLines;
 }
+
+// v(lon, lat) over a grid's values (rows by columns, the whole grid), the
+// value of the cell the point falls in, or NaN outside the grid. crs is the
+// grid's proj4 string, or none for longitude and latitude.
+export function sampler(desc, values, { crs = null, proj4 = null } = {}) {
+  const ax = desc.axes, nx = ax.x.n;
+  const fwd = crs ? proj4("WGS84", crs) : null, x0 = ax.x.values[0];
+  return (lon, lat) => {
+    let x = lon, y = lat;
+    if (fwd) { const q = fwd.forward([lon, lat]); x = q[0]; y = q[1]; if (!isFinite(x) || !isFinite(y)) return NaN; }
+    else x = ((((lon - x0) % 360) + 360) % 360) + x0;
+    const i = F.cellOf(ax.x, x), j = F.cellOf(ax.y, y);
+    return i < 0 || j < 0 ? NaN : values[j * nx + i];
+  };
+}
+
+// The sea floor under an ocean box: a mesh over the box at each point's
+// depth below sea level (from elev(lon, lat), metres, up positive) at the
+// ocean's exaggeration, so it sits under the shell and sections where they
+// meet the bottom. Depths past floor (the box's deepest edge, m) lie on
+// that edge; land and points with no value are clear. Coloured through
+// style (a topography's palette and range). opts: box [lon0, lon1, lat0,
+// lat1], exag, floor, n (cells along each side), tag.
+export function floorLayer(frame, group, elev, style, { box, exag, floor, n = 200, tag = null } = {}) {
+  const lonAt = (u) => box[0] + u * (box[1] - box[0]), latAt = (v) => box[3] - v * (box[3] - box[2]);
+  // values at cell centres (painted) and at vertices (placed)
+  const cells = new Float32Array(n * n);
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+    const z = elev(lonAt((i + 0.5) / n), latAt((j + 0.5) / n));
+    cells[j * n + i] = z < 0 ? z : NaN;
+  }
+  const depthAt = (u, v) => { const z = elev(lonAt(u), latAt(v)); return z === z && z < 0 ? Math.min(-z, floor) : 0; };
+  const tex = makeTexture(n, n);
+  paint(tex, cells, style);
+  const mesh = new THREE.Mesh(frame.gridGeometry(n, n, (u, v) => [lonAt(u), latAt(v), F.depthRadius(depthAt(u, v), exag)]), cutout(tex));
+  mesh.userData.layer = tag;
+  group.add(mesh);
+  return { kind: "floor", mesh, tex, cells, n, depthAt };
+}
