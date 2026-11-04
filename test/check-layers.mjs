@@ -3,7 +3,7 @@
 // values, with contour lines; and the read window each one asks for.
 import * as THREE from "three";
 import { makeFrame } from "../src/scene/frame.js";
-import { surfaceLayer, volumeLayer, paintLayer, isoLayer, reliefLayer, clearGroup } from "../src/scene/layers.js";
+import { surfaceLayer, volumeLayer, paintLayer, isoLayer, reliefLayer, floorLayer, sampler, clearGroup } from "../src/scene/layers.js";
 import * as F from "../src/core/fourd.js";
 
 let fails = 0;
@@ -84,6 +84,25 @@ process.exit(fails ? 1 : 0);// a topography in relief, an image clipped at a lat
   paintLayer(img, rgba, {});
   const a = (j) => img.tex.image.data[4 * (j * 2 * n) + 3];
   ok(a(0) === 0 && a(n - 1) === 255 && img.tex.image.data[4 * (2 * n * (n - 1))] === 200, "image: its own colours, cleared north of the clip");
+  clearGroup(frame, g);
+}
+
+// the sea floor under an ocean box, sampled from a topography grid
+{
+  const n = 36, desc = { axes: { x: { n: 2 * n, values: Float64Array.from({ length: 2 * n }, (_, i) => -180 + (360 / (2 * n)) * (i + 0.5)) },
+    y: { n, values: Float64Array.from({ length: n }, (_, j) => 90 - (180 / n) * (j + 0.5)) } } };
+  // deep west of 75 E, shallow east of it, land north of 50 S
+  const vals = Float32Array.from({ length: 2 * n * n }, (_, q) => { const lon = desc.axes.x.values[q % (2 * n)], lat = desc.axes.y.values[Math.floor(q / (2 * n))]; return lat > -50 ? 500 : lon < 75 ? -4000 : -200; });
+  const f = sampler(desc, vals);
+  ok(f(70, -60) === -4000 && f(80, -60) === -200 && f(80, -40) === 500 && f(80 + 360, -60) === -200, "sampler: cells by lon, lat, wrapping");
+  const g = new THREE.Group();
+  const F2 = floorLayer(frame, g, f, { palette: "topo", range: [-6000, 6000] }, { box: [60, 90, -70, -45], exag: 100, floor: 1000, n: 20 });
+  ok(Math.abs(F2.depthAt(0.1, 0.9) - 1000) < 1e-9, "floor: deeper than the box lies on its floor");
+  ok(Math.abs(F2.depthAt(0.9, 0.9) - 200) < 1e-9, "floor: shallow ground at its depth");
+  ok(F2.depthAt(0.9, 0.05) === 0, "floor: land at the surface");
+  const llr = F2.mesh.geometry.userData.llr;
+  ok(Math.min(...Array.from({ length: llr.length / 3 }, (_, k) => llr[3 * k + 2])) > F.depthRadius(1000, 100) - 1e-9, "floor never below the box");
+  ok(F2.tex.image.data[3] === 0 && F2.tex.image.data[4 * (19 * 20) + 3] === 255, "floor: land clear, sea painted");
   clearGroup(frame, g);
 }
 
