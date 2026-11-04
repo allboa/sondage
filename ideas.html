@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>sondage: Ideas</title>
-<meta name="description" content="Parked ideas for sondage: what to reach for next, from retreat-to-bloom timing to faster reads and a mixed flat store.">
+<meta name="description" content="Parked ideas for sondage: what to reach for next, from retreat-to-bloom timing to faster reads, a mixed flat store and voxel views with chunk statistics.">
 <link rel="stylesheet" href="css/app.css">
 <style>
   html, body { height: auto; }
@@ -57,6 +57,29 @@
     <li><b>Overview arrays.</b> <code>chlor_a_x2</code> to <code>x32</code> carry no <code>units</code> attribute yet; the registry fills it in.</li>
     <li><b>The COG header route</b> (kept for comparison): open only the image a read needs, not every IFD, and ask for bigger blocks.</li>
     <li><b>A mixed flat store.</b> The overview build showed that jobs at the flat store level are cheap. That opens a Lance-backed flat store, with a generic fallback, holding materialised and virtual chunks side by side: one of Icechunk's big offers, with less bespoke tooling.</li>
+  </ul>
+
+  <h2>Voxels and chunk statistics</h2>
+  <p>Added 4 November 2026. Prompted by the <a href="https://googlemapsmania.blogspot.com/2026/11/the-era-of-voxel-map-has-arrived.html">voxel map</a> trend, and the <a href="https://p.migdal.pl/warsaw-vibe-voxel/">Warsaw in Voxels</a> demo (OpenStreetMap, lidar and a city tree database at 1 m voxels, drawn with Three.js; no code published). The look is not the point. The point is that an ocean model already is a voxel grid, and a voxel drawn at its true size shows the data as it is.</p>
+  <h3>Model cells as blocks</h3>
+  <ul>
+    <li>BRAN cells (lon, lat, depth, time) drawn as blocks of their true extent, no interpolation: thresholded ("water warmer than 2 C", "salinity above 34.7") and cut away like the cutaway page. Picking a block gives its value and the chunk reference it came from.</li>
+    <li>Instanced boxes carry it to about 1e5 visible blocks. Past that, ray marching through a WebGL2 3D texture (one chunk or one overview level per texture) is the way to scale.</li>
+  </ul>
+  <h3>Chunks as the coarse voxel, with sufficient statistics</h3>
+  <p>The trend.sst scheme, carried over to chunks. trend.sst stores, per S2 cell and date, <code>n</code>, <code>sumw</code>, <code>sumwx</code> and <code>sumwx2</code>. Sums are associative, so any union of cells over any dates aggregates exactly, and every mean, variance or rollup is arithmetic on the sums. For a 3D store, the native chunk is the natural cell.</p>
+  <ul>
+    <li>One small table per variable: a row per (chunk, time step) with <code>n</code>, <code>sumw</code>, <code>sumwx</code>, <code>sumwx2</code>, plus <code>min</code> and <code>max</code>. Weights are cell area times layer thickness, so means are volume means. BRAN temp at 1x1x300x300 chunks is 51 by 5 by 12 chunks per day, about 3000 rows.</li>
+    <li>The browser reads that table first and draws the chunk grid as a blocky volume straight away (mean, variance, or fraction of cells past a threshold), then refines into real chunks only where the view or the threshold asks for them. <code>min</code> and <code>max</code> also prune: a chunk whose max is below the threshold is never read.</li>
+    <li>Any region and depth range over any dates is a selection of rows, so a volume mean series, a monthly climatology or an anomaly against it costs no chunk reads.</li>
+    <li>Trends: adding <code>sumwt</code> and <code>sumwt2</code>, <code>sumwtx</code> (t the time) gives the least squares slope per chunk exactly from the sums, aggregated over any span. A trend volume falls out of the same table.</li>
+    <li>Building it is a job at the flat store level (like the overview refs), next to the raad.virtualize indexes, written as Parquet. Each date is independent, so it backfills and resumes like trend.sst.</li>
+    <li><span class="tag open">open</span>Native chunks or a fixed 3D grid shared across sources (the trend.sst S2 registry is the 2D version of that choice). Native chunks are free to build; a shared grid lets sources compare cell by cell.</li>
+  </ul>
+  <h3>Elsewhere in the mesh work</h3>
+  <ul>
+    <li><b>Greedy meshing</b> (meshcore): merge neighbouring voxel faces into quads and drop the hidden ones, so a voxel block becomes an ordinary mesh with a CRS, renderable by rayvertex or rayrender. The 3D version of what quadmesh did for pixels.</li>
+    <li><b>Voxelised lidar</b> (pointcore): counts, max height or class per voxel, a 3D raster of a point cloud and a level of detail for drone lidar. Prior art: lidR <code>voxel_metrics</code>, the PDAL voxel filters, Open3D <code>voxel_down_sample</code>. The same sufficient statistics apply per voxel.</li>
   </ul>
 
   <h2>The viewer</h2>
