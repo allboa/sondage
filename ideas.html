@@ -74,7 +74,7 @@
     <li>Any region and depth range over any dates is a selection of rows, so a volume mean series, a monthly climatology or an anomaly against it costs no chunk reads.</li>
     <li>Trends: adding <code>sumwt</code> and <code>sumwt2</code>, <code>sumwtx</code> (t the time) gives the least squares slope per chunk exactly from the sums, aggregated over any span. A trend volume falls out of the same table.</li>
     <li>Building it is a job at the flat store level (like the overview refs), next to the raad.virtualize indexes, written as Parquet. Each date is independent, so it backfills and resumes like trend.sst.</li>
-    <li><span class="tag open">open</span>Native chunks or a fixed 3D grid shared across sources (the trend.sst S2 registry is the 2D version of that choice). Native chunks are free to build; a shared grid lets sources compare cell by cell.</li>
+    <li>Decided (4 November): native chunks for now. They are free to build and match what the viewer reads. A grid shared across sources (the trend.sst S2 registry is the 2D version) is a different kind of step, for later.</li>
   </ul>
   <h3>Elsewhere in the mesh work</h3>
   <ul>
