@@ -37,6 +37,9 @@
       "kind": "volume", "palette": "viridis", "range": [-2, 30], "iso_step": 2 },
     { "id": "bran-salt", "title": "Bluelink BRAN salinity", "path": "bluelink/bluelink-daily-salt", "var": "salt",
       "kind": "volume", "palette": "ocean", "range": [33.8, 35.2], "iso_step": 0.1 },
+    { "id": "access-esm-temp", "title": "ACCESS-ESM1.6 historical ocean temperature (monthly)", "path": "access-esm/access-esm1-6.historical.ocean-3d-temp-1mon-mean", "var": "temp",
+      "kind": "volume", "units": "degrees C", "offset": -273.15, "palette": "viridis", "range": [-2, 30], "iso_step": 2,
+      "note": "conservative temperature, stored in kelvin and drawn in degrees C (offset is added after unpacking); 1850 to 2021, 50 levels, the nominal 1 degree MOM grid. Placed by its nominal xt_ocean and yt_ocean, which are true longitude and latitude south of about 65 N; the tripolar cap north of that is drawn out of place (the store has no geolon_t or geolat_t). Chunks are read from the model's netCDF files on Pawsey (bucket ct-esm1-6)" },
     { "id": "synthetic", "title": "Synthetic ocean (no network)", "synthetic": true,
       "kind": "volume", "palette": "viridis", "range": [0, 12], "iso_step": 1 }
   ],

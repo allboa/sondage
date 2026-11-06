@@ -55,6 +55,30 @@ function transpose(v, desc, k, ny, nx) {
   return out;
 }
 
+// A Source whose longitude axis has its seam away from 0 E, rolled so that
+// the axis starts there (fourd.js lonRoll): a window across the store's own
+// seam is read in two parts and joined, row by row and level by level.
+// Rows by columns only (the read gives y-major values); an entry's
+// "roll": false leaves the axis as it is.
+export function rolled(src) {
+  const { desc } = src, ax = desc.axes.x;
+  if (!ax || (src.entry && (src.entry.roll === false || src.entry.crs)) || desc.crs) return src;
+  const s = F.lonRoll(ax);
+  if (!s) return src;
+  const n = ax.n, raw = src.read;
+  desc.axes.x = F.rolledAxis(ax, s);
+  desc.notes = [...(desc.notes || []), `longitude rolled by ${s} cells, to start at ${desc.axes.x.values[0]} E`];
+  src.read = async (t, k, y0, y1, x0, x1) => {
+    const a = (x0 + s) % n, b = a + (x1 - x0);
+    if (b <= n) return raw(t, k, y0, y1, a, b);
+    const [p, q] = await Promise.all([raw(t, k, y0, y1, a, n), raw(t, k, y0, y1, 0, b - n)]);
+    const np = n - a, nq = b - n, nx = np + nq, rows = p.length / np, out = new Float32Array(rows * nx);
+    for (let r = 0; r < rows; r++) { out.set(p.subarray(r * np, (r + 1) * np), r * nx); out.set(q.subarray(r * nq, (r + 1) * nq), r * nx + np); }
+    return out;
+  };
+  return src;
+}
+
 // The parts every Source shares.
 function finish(src) {
   const raw = src.read;
@@ -67,6 +91,10 @@ function finish(src) {
     return v;
   };
   const { desc } = src;
+  // an entry may shift every value after unpacking: a model that writes
+  // temperature in kelvin, drawn in degrees C, has "offset": -273.15 (and
+  // "units": "degrees C" for the labels)
+  if (src.entry && typeof src.entry.offset === "number") desc.offset = (desc.offset ?? 0) + src.entry.offset;
   // an entry may say how its time stamps sit in their periods (fourd.js timeAt)
   if (src.entry && src.entry.stamp && desc.axes.t) desc.axes.t.stamp = src.entry.stamp;
   src.timeAt = (ms) => F.timeAt(desc, typeof ms === "string" ? F.parseDay(ms) : ms);
@@ -156,7 +184,7 @@ export async function openUrl(url, path, entry = {}) {
   const s = await openStore(url);
   const desc = await describeStore(s, path, { assume: entry.assume });
   const arr = await s.open(path);
-  return finish({ kind: s.kind, entry: { ...entry, url, var: path }, desc, store: s, read: readerOf(arr, desc, entry) });
+  return finish(rolled({ kind: s.kind, entry: { ...entry, url, var: path }, desc, store: s, read: readerOf(arr, desc, entry) }));
 }
 
 // ------------------------------------------------------------- the registry
@@ -193,7 +221,7 @@ export async function openSource(entry, base) {
   const join = entry.coalesce ?? coalescing;
   const store = await IcechunkStore.open(urls.icechunk, { fetchClient, ...(join && { withRangeCoalescing: zarr.withRangeCoalescing }) });
   const arr = await zarr.open(zarr.root(store).resolve(entry.var), { kind: "array" });
-  return finish({ kind: "icechunk", entry, desc, meta, urls, read: readerOf(arr, desc, entry) });
+  return finish(rolled({ kind: "icechunk", entry, desc, meta, urls, read: readerOf(arr, desc, entry) }));
 }
 
 // The registry file (data/fourd/stores.json and its like) or the object
