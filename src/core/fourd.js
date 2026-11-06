@@ -11,6 +11,14 @@
 // depth views can be shown and tested with no network.
 
 const DAY = 86400000;
+// Date.UTC reads years 0 to 99 as 1900 to 1999: a model calendar that
+// counts "days since 0001-01-01" needs the year set as it is.
+export function utc(y, mo = 0, d = 1, hh = 0, mi = 0, ss = 0) {
+  const t = new Date(Date.UTC(2000, mo, d, hh, mi, ss));
+  t.setUTCFullYear(y, mo, d);
+  return t.getTime();
+}
+
 const UNIT_MS = { seconds: 1000, second: 1000, minutes: 60000, minute: 60000, hours: 3600000, hour: 3600000, days: DAY, day: DAY };
 
 // CF time units ("days since 1979-01-01 00:00:00") as { step, epoch } in
@@ -20,7 +28,7 @@ export function timeUnits(units) {
   const m = /^\s*(\w+)\s+since\s+(\d{1,4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}(?:\.\d*)?))?)?\s*(?:Z|UTC|[+-]00:?00)?\s*$/i.exec(units || "");
   if (!m || !UNIT_MS[m[1].toLowerCase()]) throw new Error(`time units not understood: ${units}`);
   const [, u, y, mo, d, hh = 0, mi = 0, ss = 0] = m;
-  return { step: UNIT_MS[u.toLowerCase()], epoch: Date.UTC(+y, +mo - 1, +d, +hh, +mi, 0) + +ss * 1000 };
+  return { step: UNIT_MS[u.toLowerCase()], epoch: utc(+y, +mo - 1, +d, +hh, +mi, 0) + +ss * 1000 };
 }
 
 // An arrays.json coordinate entry as a Float64Array of its values.
@@ -138,6 +146,34 @@ export function windowOf(ax, lo, hi, { lon = false } = {}) {
   return i1 < 0 ? null : [i0, i1 + 1];
 }
 
+// A longitude axis that goes once round the Earth with its seam somewhere
+// other than 0 E or 180 E (a MOM grid's xt_ocean runs -279.5 to 79.5, so a box
+// across 80 E would be cut): the number of cells to roll it by, so that it
+// starts at its first centre at or east of 0 E, or 0 to leave it.
+export function lonRoll(ax) {
+  const v = ax && ax.values, n = v ? v.length : 0;
+  if (n < 3) return 0;
+  const step = (v[n - 1] - v[0]) / (n - 1);
+  if (!(step > 0) || Math.abs(step * n - 360) > step / 2) return 0;
+  for (let i = 1; i < n; i++) if (Math.abs(v[i] - v[i - 1] - step) > step * 1e-3) return 0;
+  const w = (x) => ((x % 360) + 360) % 360;
+  // a seam within half a cell of 0 E or 180 E (grids from 0 or from -180,
+  // by cell edges or centres) is left where it is
+  const seam = w(v[0] - step / 2) % 180;
+  if (Math.min(seam, 180 - seam) <= step / 2 + 1e-9) return 0;
+  let s = 0;
+  for (let i = 1; i < n; i++) if (w(v[i]) < w(v[s])) s = i;
+  return s;
+}
+
+// The axis rolled by s cells: values ascending from the old cell s, taken
+// modulo 360 into [0, 360) for the first.
+export function rolledAxis(ax, s) {
+  const v = ax.values, n = v.length, start = ((v[s] % 360) + 360) % 360, step = (v[n - 1] - v[0]) / (n - 1);
+  const values = Float64Array.from({ length: n }, (_, i) => start + i * step);
+  return { ...ax, values, affine: ax.affine ? { start, step } : null, roll: s };
+}
+
 // The coordinate of an axis at a fractional cell index (cell i spans i to
 // i + 1, its centre at i + 0.5), linear between centres and beyond the ends.
 export function coordAt(ax, e) {
@@ -243,7 +279,7 @@ export function clockSteps(start, end, step = "day") {
 export const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
 export function parseDay(s) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s).trim());
-  return m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) : null;
+  return m ? utc(+m[1], +m[2] - 1, +m[3]) : null;
 }
 
 // The next step after ms (or before, with dir -1) in a clock of the given step.

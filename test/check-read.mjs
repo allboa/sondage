@@ -119,6 +119,31 @@ for (const [name, variable] of [["glad.zarr", "lclu"], ["mars.zarr", "tsurf"]]) 
   ok(h && h.ok > 0 && h.fail === 0, `ledger ${JSON.stringify(h)}`);
 }
 
+// a MOM grid's longitudes (-279.5 to 79.5): rolled to start at 0.5 E, and a
+// window across the store's seam read in two parts and joined
+{
+  const { rolled } = await import("../src/read/source.js");
+  const n = 360, ny = 2, nk = 2;
+  const x = { dim: "xt_ocean", index: 3, n, chunk: 180, values: Float64Array.from({ length: n }, (_, i) => -279.5 + i), units: "", affine: { start: -279.5, step: 1 } };
+  const desc = { roles: ["t", "z", "y", "x"], axes: { x, y: { n: ny, values: Float64Array.of(-60, -59) } }, notes: [] };
+  // a value is its store column, plus 1000 a row, plus 10000 a level
+  const read = async (t, k, y0, y1, x0, x1) => {
+    const ks = Array.isArray(k) ? k : [k, k + 1], w = x1 - x0, h = y1 - y0, out = new Float32Array((ks[1] - ks[0]) * h * w);
+    for (let kk = 0; kk < ks[1] - ks[0]; kk++) for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) out[(kk * h + j) * w + i] = x0 + i + 1000 * (y0 + j) + 10000 * (ks[0] + kk);
+    return out;
+  };
+  const src = rolled({ entry: {}, desc, read });
+  ok(src.desc.axes.x.values[0] === 0.5 && src.desc.axes.x.values[359] === 359.5 && src.desc.axes.x.affine.start === 0.5, "MOM longitudes rolled to 0.5 E");
+  ok(F.windowOf(src.desc.axes.x, 60, 90, { lon: true }).join() === "60,90", "a box across 80 E is not cut");
+  const v = await src.read(0, [0, 2], 0, 2, 78, 82);
+  // rolled column 78 is 78.5 E, store column 358 (the store's last two, then its first two)
+  const got = Array.from(v.slice(0, 4));
+  ok(got.join() === "358,359,0,1", `seam read row 0: ${got}`);
+  ok(v[4] === 1358 && v[8 + 2] === 10000 && v.length === 16, "seam read rows and levels");
+  const left = (x0) => rolled({ entry: {}, desc: { roles: [], axes: { x: { n: 3600, values: Float64Array.from({ length: 3600 }, (_, i) => x0 + 0.1 * i) } }, notes: [] }, read }).desc.axes.x.roll === undefined;
+  ok(left(0.05) && left(-179.95), "grids from 0 E and from 180 W are left");
+}
+
 server.close();
 console.log(`read: Sources over 9 fixture stores and the registry${fails ? `, ${fails} failing` : ", all agree"}`);
 process.exit(fails ? 1 : 0);

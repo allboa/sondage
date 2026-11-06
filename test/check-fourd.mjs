@@ -21,6 +21,10 @@ const json = (p) => JSON.parse(readFileSync(new URL(p, import.meta.url), "utf8")
   ok(F.timeUnits("hours since 1900-01-01").step === 3600000, "hours");
   let threw = false; try { F.timeUnits("months since 2000-01-01"); } catch (e) { threw = true; }
   ok(threw, "months are refused (not a fixed length)");
+  // a model calendar from year 1 (ACCESS-ESM: 675348.5 days is mid January 1850)
+  const m = F.timeUnits("days since 0001-01-01 00:00:00");
+  ok(new Date(m.epoch + 675348.5 * m.step).toISOString() === "1850-01-16T12:00:00.000Z", "days since 0001-01-01");
+  ok(F.parseDay("0050-03-01") === F.utc(50, 2, 1) && new Date(F.utc(50, 2, 1)).getUTCFullYear() === 50, "years below 100 kept");
 }
 
 // BRAN: four dims with roles from the description, affine coords, depths inline
