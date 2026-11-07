@@ -80,7 +80,10 @@ const ui = {
 };
 
 const dayOf = (ms) => Math.floor(ms / DAY);
-const exag = () => 10 ** state.dz;
+// the ocean's depth exaggeration, capped so the deepest level drawn ("Down
+// to", and half a level past it) stays short of the Earth's centre
+const exagAsked = () => 10 ** state.dz;
+const exag = () => F.capExag(exagAsked(), zmaxM() * 1.1);
 // topography relief: its own exaggeration, since the ocean's (exag) would
 // lift land thousands of km
 const rexag = () => 10 ** state.rz;
@@ -597,7 +600,7 @@ R.setFetchListener(() => { clearTimeout(renderHosts.t); renderHosts.t = setTimeo
 function renderControls() {
   ui.box.value = state.box;
   ui.zmax.value = state.zmax; ui.zmaxOut.textContent = `${Math.round(zmaxM())} m`;
-  ui.dz.value = state.dz; ui.dzOut.textContent = `x ${Math.round(exag())}`;
+  ui.dz.value = state.dz; ui.dzOut.textContent = exag() < exagAsked() ? `x ${Math.round(exag())} (capped at the centre)` : `x ${Math.round(exag())}`;
   ui.rz.value = state.rz; ui.rzOut.textContent = `x ${Math.round(rexag())}`;
   ui.cl.value = state.cl; ui.cp.value = state.cp;
   ui.cut.checked = !!state.cut; ui.coast.checked = !!state.coast;

@@ -91,7 +91,8 @@ export function reliefLayer(frame, P, values, exag) {
     const i = Math.min(nx - 1, Math.max(0, Math.floor(u * nx))), j = Math.min(ny - 1, Math.max(0, Math.floor(v * ny)));
     return values[j * nx + i];
   };
-  P.rAt = (u, v) => { const z = cell(u, v); return z === z ? lift + z * s : lift; };
+  // at a great exaggeration the deepest trenches stop short of the centre
+  P.rAt = (u, v) => { const z = cell(u, v); return z === z ? Math.max(0.02, lift + z * s) : lift; };
   const old = P.mesh.geometry;
   P.mesh.geometry = frame.gridGeometry(P.nu, P.nv, P.at(P.rAt));
   frame.drop(old);
