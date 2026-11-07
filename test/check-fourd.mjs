@@ -144,4 +144,12 @@ near(F.depthRadius(6371, 1000), 0, 1e-12, "6371 m at x 1000 reaches the centre")
 }
 
 console.log(fails ? `${fails} failed` : "fourd: all checks pass");
-process.exit(fails ? 1 : 0);
+process.exit(fails ? 1 : 0);// the depth exaggeration is capped short of the centre
+{
+  ok(F.capExag(1000, 1000) === 1000, "cap: 1000 m at x1000 is within it");
+  const c = F.capExag(10000, 1000);
+  ok(Math.abs(F.depthRadius(1000, c) - 0.1) < 1e-12 && c < 10000, `cap: 1000 m at x10000 stops at 0.1 radii (x${c.toFixed(0)})`);
+  ok(F.capExag(5, 0) === 5, "cap: no depth, no cap");
+}
+
+

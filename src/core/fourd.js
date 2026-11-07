@@ -293,6 +293,11 @@ export function stepFrom(ms, step, dir = 1) {
 // for the Earth (R m), with the depth multiplied by exag.
 export const EARTH_R = 6371000;
 export const depthRadius = (depth, exag, R = EARTH_R) => 1 - (depth * exag) / R;
+// The largest exaggeration that keeps a depth (m) short of the centre: past
+// it the deepest level would go through the centre and come out the other
+// side (a box turned inside out). frac is how far towards the centre the
+// depth may go. Returns exag itself when that is already within the cap.
+export const capExag = (exag, depth, frac = 0.9, R = EARTH_R) => (depth > 0 ? Math.min(exag, (frac * R) / depth) : exag);
 
 // A registry entry's URLs: the store and its arrays.json under base, which
 // is the one place the index's home is named.
