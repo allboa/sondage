@@ -246,6 +246,19 @@ function typicalStep(d) {
   return t.length > 1 ? (t.at(-1) - t[0]) / (t.length - 1) / DAY : 1;
 }
 
+// The level a surface layer reads from a dataset with depth: its entry's
+// "level" (a number), the Shell level slider for "level": "shell", or the
+// top level. A volume dataset drawn this way covers its whole grid at one
+// depth, and the box keeps its own sections.
+const followsShell = (L) => L.entry.kind !== "volume" && L.entry.level === "shell";
+function levelOf(L) {
+  const z = L.ds && L.ds.desc.axes.z;
+  if (!z) return 0;
+  const k = followsShell(L) ? state.lev : Number.isFinite(L.entry.level) ? L.entry.level : 0;
+  return Math.max(0, Math.min(z.n - 1, Math.round(k)));
+}
+const levelText = (L) => { const z = L.ds && L.ds.desc.axes.z, k = L.parts && L.parts.k; return z && L.parts && L.parts.kind === "surface" && (k || L.entry.level != null) ? ` at ${z.values[k].toFixed(1)} m (level ${k})` : ""; };
+
 // geometry for a layer: a surface mesh over its whole grid, or for an ocean
 // layer the window over the box and its shell and two sections
 function buildParts(L) {
@@ -255,6 +268,7 @@ function buildParts(L) {
     ? surfaceLayer(frame, L.group, d, e, { crs: e.crs, proj4, tag: L })
     : volumeLayer(frame, L.group, d, e, { crs: e.crs, box, zmax: zmaxM(), lev: state.lev, cl: state.cl, cp: state.cp, exag: exag(), rim: COLORS.box, tag: L });
   if (P.error) { L.error = P.error; L.parts = null; return; }
+  if (P.kind === "surface") P.k = levelOf(L);
   L.parts = P;
   if (!root.children.includes(L.group)) root.add(L.group);
   if (L.shown) applyData(L, L.shown.values);
@@ -366,7 +380,7 @@ async function show() {
     if (L.entry.kind === "volume" && !was) needBase.push(L);
     const off = plan.tt.offsetDays;
     if (plan.still) { L.status = "every date (no time axis)"; return; }
-    L.status = `${F.isoDay(plan.tt.date)}${Math.abs(off) >= 1 ? ` (${off > 0 ? "+" : ""}${off.toFixed(0)} d)` : ""}, step ${plan.tt.index}`;
+    L.status = `${F.isoDay(plan.tt.date)}${Math.abs(off) >= 1 ? ` (${off > 0 ? "+" : ""}${off.toFixed(0)} d)` : ""}, step ${plan.tt.index}${levelText(L)}`;
   });
   buildBase();
   buildFloor();
@@ -559,7 +573,7 @@ function renderLayers() {
       sel.value = isoOf(L.entry.id);
       sel.addEventListener("change", () => { setIso(L.entry.id, sel.value); if (L.visible && L.shown) applyData(L, L.shown.values); });
       c.append(sel);
-      if (L.visible && L.shown) lookLinks(c, lookUrls(L.ds, L.shown.plan.tt.index, L.parts.kind === "volume" ? L.parts.lev : null));
+      if (L.visible && L.shown) lookLinks(c, lookUrls(L.ds, L.shown.plan.tt.index, L.parts.kind === "volume" ? L.parts.lev : L.parts.k || null));
       t2.append(c); ui.layers.append(t2);
     }
   }
@@ -598,11 +612,20 @@ function renderControls() {
     ui.lev.max = P.nk - 1; ui.lev.value = P.lev;
     ui.levOut.textContent = `${P.z[P.lev].toFixed(1)} m (level ${P.lev})`;
     ui.clOut.textContent = `${P.lonC.toFixed(2)}${DEG}`; ui.cpOut.textContent = `${P.latC.toFixed(2)}${DEG}`;
-  } else { ui.levOut.textContent = ui.clOut.textContent = ui.cpOut.textContent = "no ocean layer"; }
+  } else {
+    ui.levOut.textContent = ui.clOut.textContent = ui.cpOut.textContent = "no ocean layer";
+    const S = activeLayers().find((L) => followsShell(L) && L.parts && L.ds.desc.axes.z);
+    if (S) {
+      const z = S.ds.desc.axes.z;
+      ui.lev.max = z.n - 1; ui.lev.value = S.parts.k;
+      ui.levOut.textContent = `${z.values[S.parts.k].toFixed(1)} m (level ${S.parts.k})`;
+    }
+  }
 }
 
 function rebuildVolumes() {
   for (const L of activeLayers()) if (L.ds && L.entry.kind === "volume") buildParts(L);
+  for (const L of activeLayers()) if (L.parts && followsShell(L)) L.parts.k = levelOf(L);
   buildFloor();
   renderControls(); writeHash();
 }
@@ -622,6 +645,8 @@ ui.boxGo.addEventListener("click", () => {
   ui.status.textContent = ""; box = b; state.box = ui.box.value.trim(); relayout(); rebuildVolumes(); show();
 });
 ui.lev.addEventListener("input", () => { state.lev = +ui.lev.value; rebuildVolumes(); });
+// a surface that follows the shell reads its new level when the slider stops
+ui.lev.addEventListener("change", () => { if (activeLayers().some(followsShell)) show(); });
 ui.zmax.addEventListener("input", () => { ui.zmaxOut.textContent = `${Math.round(10 ** +ui.zmax.value)} m`; });
 ui.zmax.addEventListener("change", () => { state.zmax = +ui.zmax.value; rebuildVolumes(); show(); });
 ui.dz.addEventListener("input", () => { state.dz = +ui.dz.value; rebuildVolumes(); });
@@ -714,7 +739,7 @@ function refreshPick() {
     const t = plan.tt.index;
     let v, k = null;
     if (P.rgba) { const q = 4 * (j * P.nx + i); row("colour", `rgb(${vals[q]}, ${vals[q + 1]}, ${vals[q + 2]})`); continue; }
-    if (P.kind === "surface") v = vals[j * P.nx + i];
+    if (P.kind === "surface") { v = vals[j * P.nx + i]; if (levelText(L)) k = P.k; }
     else {
       const li = i - P.w[2], lj = j - P.w[0];
       if (li < 0 || lj < 0 || li >= P.nx || lj >= P.ny) { row("cell", "outside the box"); continue; }
@@ -723,8 +748,8 @@ function refreshPick() {
       v = vals[k * P.nx * P.ny + lj * P.nx + li];
       drawProfile(L, li, lj, k);
     }
-    row(`value${k !== null ? ` at ${P.z[k].toFixed(1)} m` : ""}`, `${fmt(v)} ${L.entry.units ?? d.units}`);
-    const idx = d.roles.map((r) => (r === "t" ? t : r === "z" ? (k ?? 0) : r === "y" ? j : r === "x" ? i : 0));
+    row(`value${k !== null ? ` at ${(P.z || d.axes.z.values)[k].toFixed(1)} m` : ""}`, `${fmt(v)} ${L.entry.units ?? d.units}`);
+    const idx = d.roles.map((r) => (r === "t" ? t : r === "z" ? (k ?? P.k ?? 0) : r === "y" ? j : r === "x" ? i : 0));
     row("cell", d.dims.map((n, q) => `${n} ${idx[q]}`).join(", "));
     row("chunk", idx.map((x, q) => Math.floor(x / d.chunks[q])).join("."));
   }
