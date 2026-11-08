@@ -294,24 +294,22 @@ $("section").addEventListener("mouseleave", () => { hoverS = null; drawSection()
 
 // ---------------------------------------------------------------- the map
 
-const MAP = { half: 3333500 };
-let overview = null;
-async function loadOverview() {
-  const read = async (a) => {
-    const L = await openCog(C.SOURCES.bedmap.url(a));
-    const lv = L[L.length - 2];
-    const [data] = await lv.img.readRasters({ samples: [0] });
-    return { data, width: lv.width, height: lv.height };
-  };
-  const [s, b, m] = await Promise.all(["surface_topography", "bed_topography", "mask"].map(read));
-  const { width: W, height: H } = s, img = new ImageData(W, H);
+// The legend map: Bedmap3's whole grid from a coarse overview, zoomed and
+// panned in EPSG:3031 metres (view), with a finer read of the same arrays
+// over the view once it is zoomed in far enough for the overview to blur.
+const MAP = { half: C.MAP_HALF };
+let view = { cx: 0, cy: 0, half: C.MAP_HALF };
+let overview = null, detail = null;
+// a canvas of a window of surface, bed and mask, shaded as the map is
+function shadeMap(s, b, m, W, H) {
+  const img = new ImageData(W, H);
   for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
-    const k = j * W + i, o = k * 4, z = s.data[k], bed = b.data[k], mk = m.data[k];
+    const k = j * W + i, o = k * 4, z = s[k], bed = b[k], mk = m[k];
     let c;
     if (mk === 3 || mk === 2) c = [150, 190, 220];
     else if (mk === 4) c = [130, 105, 85];
     else if (z !== -9999) {
-      const e = j > 0 && i > 0 && s.data[k - 1] !== -9999 && s.data[k - W] !== -9999 ? (z - s.data[k - 1]) + (z - s.data[k - W]) : 0;
+      const e = j > 0 && i > 0 && s[k - 1] !== -9999 && s[k - W] !== -9999 ? (z - s[k - 1]) + (z - s[k - W]) : 0;
       const v = Math.max(120, Math.min(255, 205 + z / 60 + e * 0.8));
       c = [v, v, Math.min(255, v + 12)];
     } else if (bed !== -9999) { const d = Math.max(0, Math.min(1, -bed / 4500)); c = [20 * (1 - d) + 5, 70 * (1 - d) + 20, 140 * (1 - d) + 50]; }
@@ -320,17 +318,57 @@ async function loadOverview() {
   }
   const cv = document.createElement("canvas"); cv.width = W; cv.height = H;
   cv.getContext("2d").putImageData(img, 0, 0);
-  overview = cv;
+  return cv;
+}
+async function loadOverview() {
+  const read = async (a) => {
+    const L = await openCog(C.SOURCES.bedmap.url(a));
+    const lv = L[L.length - 2];
+    const [data] = await lv.img.readRasters({ samples: [0] });
+    return { data, width: lv.width, height: lv.height };
+  };
+  const [s, b, m] = await Promise.all(["surface_topography", "bed_topography", "mask"].map(read));
+  overview = shadeMap(s.data, b.data, m.data, s.width, s.height);
+  overview.res = (2 * MAP.half) / s.width;
   drawMap();
 }
+// the finer read over the view, a moment after the view settles
+let detailTimer = 0, detailTicket = 0;
+function wantDetail() {
+  clearTimeout(detailTimer);
+  detailTimer = setTimeout(async () => {
+    const t = ++detailTicket, n = $("cut-map").width, px = Math.max(500, (2 * view.half) / n);
+    if (!overview || px >= overview.res * 0.9) { detail = null; drawMap(); return; }
+    const box = [view.cx - view.half, view.cy - view.half, view.cx + view.half, view.cy + view.half];
+    try {
+      const [s, b, m] = await Promise.all(["surface_topography", "bed_topography", "mask"].map(async (a) => readBox(await openCog(C.SOURCES.bedmap.url(a)), box, px, -9999, 1200)));
+      if (t !== detailTicket || !s) return;
+      detail = { cv: shadeMap(s.data, b.data, m.data, s.width, s.height), x0: s.x0, y0: s.y0, x1: s.x0 + s.width * s.dx, y1: s.y0 - s.height * s.dy, res: s.dx };
+      drawMap();
+    } catch (e) { /* the overview stands in */ }
+  }, 250);
+}
+function setView(v) { view = C.clampView(v); drawMap(); wantDetail(); }
+
 function drawMap() {
-  const c = $("cut-map"), g = c.getContext("2d"), W = c.width, H = c.height;
+  const c = $("cut-map"), dpr = devicePixelRatio || 1, n = Math.round((c.clientWidth || 300) * dpr);
+  if (c.width !== n) { c.width = n; c.height = n; }
+  const g = c.getContext("2d"), W = n, H = n, k = n / (c.clientWidth || 300);
   g.fillStyle = INK.sky; g.fillRect(0, 0, W, H);
-  if (overview) g.drawImage(overview, 0, 0, W, H);
-  const P = (p) => [((p[0] + MAP.half) / (2 * MAP.half)) * W, ((MAP.half - p[1]) / (2 * MAP.half)) * H];
+  const P = (p) => C.toPixel(view, n, p);
+  if (overview) {
+    const ow = overview.width, sx = ((view.cx - view.half + MAP.half) / (2 * MAP.half)) * ow, sy = ((MAP.half - view.cy - view.half) / (2 * MAP.half)) * ow;
+    g.imageSmoothingEnabled = view.half > MAP.half / 8;
+    g.drawImage(overview, sx, sy, (view.half / MAP.half) * ow, (view.half / MAP.half) * ow, 0, 0, W, H);
+  }
+  if (detail) {
+    const [x0, y0] = P([detail.x0, detail.y0]), [x1, y1] = P([detail.x1, detail.y1]);
+    g.imageSmoothingEnabled = false;
+    g.drawImage(detail.cv, x0, y0, x1 - x0, y1 - y0);
+  }
   const { A, B } = ends();
   if (current) {
-    g.fillStyle = "rgba(255,211,77,0.25)"; g.strokeStyle = "rgba(255,211,77,0.9)"; g.lineWidth = 1;
+    g.fillStyle = "rgba(255,211,77,0.25)"; g.strokeStyle = "rgba(255,211,77,0.9)"; g.lineWidth = k;
     g.beginPath(); current.blk.corners.forEach((q, i) => { const [x, y] = P(q); i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.closePath(); g.fill(); g.stroke();
   }
   const site = siteOf(), sp = site ? toXY(site.ll[0], site.ll[1]) : null;
@@ -342,39 +380,65 @@ function drawMap() {
     if (sp && state.guide) {
       const e = P(C.guideEnd(pending, sp, MAP.half));
       // dark under bright, so it shows over the ice and the sea alike
-      g.lineWidth = 3; g.strokeStyle = "rgba(5,7,13,0.75)";
+      g.lineWidth = 3 * k; g.strokeStyle = "rgba(5,7,13,0.75)";
       g.beginPath(); g.moveTo(pa[0], pa[1]); g.lineTo(e[0], e[1]); g.stroke();
-      g.lineWidth = 1.5; g.strokeStyle = "#ffd34d"; g.setLineDash([6, 4]);
+      g.lineWidth = 1.5 * k; g.strokeStyle = "#ffd34d"; g.setLineDash([6 * k, 4 * k]);
       g.beginPath(); g.moveTo(pa[0], pa[1]); g.lineTo(e[0], e[1]); g.stroke(); g.setLineDash([]);
     }
     if (cursor) {
       const q = P(cursor);
-      g.strokeStyle = "#ff7ab8"; g.lineWidth = 2;
+      g.strokeStyle = "#ff7ab8"; g.lineWidth = 2 * k;
       g.beginPath(); g.moveTo(pa[0], pa[1]); g.lineTo(q[0], q[1]); g.stroke();
     }
   } else {
-    g.strokeStyle = "#ff7ab8"; g.lineWidth = 2;
+    g.strokeStyle = "#ff7ab8"; g.lineWidth = 2 * k;
     g.beginPath(); g.moveTo(pa[0], pa[1]); g.lineTo(pb[0], pb[1]); g.stroke();
   }
-  g.fillStyle = "#fff"; g.font = "11px system-ui, sans-serif";
-  g.fillText("A", pa[0] + 4, pa[1] - 4); if (!pending) g.fillText("B", pb[0] + 4, pb[1] - 4);
+  // the ends as handles to drag, ringed when the pointer is on one
+  g.font = `${11 * k}px system-ui, sans-serif`;
+  const handle = (q, label, hot) => {
+    g.fillStyle = "#ff7ab8"; g.strokeStyle = hot ? "#ffd34d" : "#fff"; g.lineWidth = (hot ? 2 : 1.2) * k;
+    g.beginPath(); g.arc(q[0], q[1], (hot ? 5.5 : 4) * k, 0, 7); g.fill(); g.stroke();
+    g.fillStyle = "#fff"; g.fillText(label, q[0] + 6 * k, q[1] - 6 * k);
+  };
+  handle(pa, "A", !pending && hot === "a");
+  if (!pending) handle(pb, "B", hot === "b");
   if (hoverS !== null && current) {
     const [x, y] = P(C.at(current.f, hoverS, 0));
-    g.beginPath(); g.arc(x, y, 3.5, 0, 7); g.fill();
+    g.fillStyle = "#fff"; g.beginPath(); g.arc(x, y, 3.5 * k, 0, 7); g.fill();
   }
   if (site) {
     const [x, y] = P(sp);
-    g.fillStyle = "#ff3b3b"; g.strokeStyle = "#fff"; g.lineWidth = 1;
-    g.beginPath(); g.arc(x, y, 3.5, 0, 7); g.fill(); g.stroke();
+    g.fillStyle = "#ff3b3b"; g.strokeStyle = "#fff"; g.lineWidth = k;
+    g.beginPath(); g.arc(x, y, 3.5 * k, 0, 7); g.fill(); g.stroke();
   }
+  // a scale bar, bottom left (true at 71S; the map is polar stereographic)
+  const bar = C.scaleBar(2 * view.half), bw = (bar / (2 * view.half)) * W, bx = 8 * k, by = H - 10 * k;
+  const label = bar >= 1000 ? `${bar / 1000} km` : `${bar} m`, tw = g.measureText(label).width;
+  g.fillStyle = "rgba(5,7,13,0.6)"; g.fillRect(bx - 4 * k, by - 16 * k, Math.max(bw, tw) + 8 * k, 22 * k);
+  g.strokeStyle = "#fff"; g.lineWidth = 1.5 * k;
+  g.beginPath(); g.moveTo(bx, by - 4 * k); g.lineTo(bx, by); g.lineTo(bx + bw, by); g.lineTo(bx + bw, by - 4 * k); g.stroke();
+  g.fillStyle = "#fff"; g.textAlign = "center";
+  g.fillText(label, bx + Math.max(bw, tw) / 2, by - 5 * k);
+  g.textAlign = "left";
 }
-// two clicks: the first sets A, the second B
-let pending = null, cursor = null;
-const HINT = "Click twice on the map for a new line: A, then B.";
-const mapXY = (e) => {
-  const r = $("cut-map").getBoundingClientRect();
-  return [((e.clientX - r.left) / r.width) * 2 * MAP.half - MAP.half, MAP.half - ((e.clientY - r.top) / r.height) * 2 * MAP.half];
-};
+
+// Placing the ends: two clicks, the first A and the second B, or drag
+// either end; drag elsewhere to pan, wheel or pinch (or the buttons) to
+// zoom.
+let pending = null, cursor = null, hot = null;
+const HINT = "Click twice on the map for a new line, A then B, or drag an end. Wheel or pinch to zoom, drag to pan.";
+const mapPx = (e) => { const r = $("cut-map").getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top, r.width]; };
+const mapXY = (e) => { const [x, y, w] = mapPx(e); return C.fromPixel(view, w, [x, y]); };
+const llText = (p) => { const ll = toLL(p[0], p[1]); return `${ll[0].toFixed(4)},${ll[1].toFixed(4)}`; };
+// the end under the pointer, within a few pixels
+function endAt(e) {
+  if (pending) return null;
+  const [x, y, w] = mapPx(e), { A, B } = ends();
+  const d = (p) => { const q = C.toPixel(view, w, p); return Math.hypot(q[0] - x, q[1] - y); };
+  const da = d(A), db = d(B), r = e.pointerType === "touch" ? 16 : 9;
+  return Math.min(da, db) > r ? null : da <= db ? "a" : "b";
+}
 // while B is being placed, how far the line to the cursor passes from the
 // site
 function placingHint() {
@@ -384,20 +448,79 @@ function placingHint() {
   const o = C.offLine(pending, cursor, toXY(site.ll[0], site.ll[1]));
   return `Now click B: this line passes ${(o.d / 1000).toFixed(o.d < 10000 ? 1 : 0)} km from ${site.short}${o.u <= 0 || o.u >= 1 ? " (beyond its end)" : ""}.`;
 }
-$("cut-map").addEventListener("mousemove", (e) => {
-  if (!pending) return;
-  cursor = mapXY(e);
-  $("map-hint").textContent = placingHint();
-  drawMap();
-});
-$("cut-map").addEventListener("mouseleave", () => { cursor = null; if (pending) drawMap(); });
-$("cut-map").addEventListener("click", (e) => {
-  const [x, y] = mapXY(e);
-  const ll = toLL(x, y), s = `${ll[0].toFixed(3)},${ll[1].toFixed(3)}`;
-  if (!pending) { pending = [x, y]; cursor = null; state.a = s; $("a").value = s; $("map-hint").textContent = placingHint(); drawMap(); return; }
+function showAt(p) {
+  const ll = toLL(p[0], p[1]);
+  $("map-at").textContent = `${Math.abs(ll[1]).toFixed(4)}${DEG}S, ${Math.abs(ll[0]).toFixed(4)}${DEG}${ll[0] < 0 ? "W" : "E"} (${(p[0] / 1000).toFixed(1)}, ${(p[1] / 1000).toFixed(1)} km)`;
+}
+function clickAt(p) {
+  const s = llText(p);
+  if (!pending) { pending = p; cursor = null; state.a = s; $("a").value = s; $("map-hint").textContent = placingHint(); drawMap(); return; }
   pending = null; cursor = null; state.b = s; $("map-hint").textContent = HINT;
   state.cam = null; syncInputs(); writeHash(); build();
+}
+const pointers = new Map();
+let drag = null;   // { kind: "pan" | "a" | "b" | "pinch", ... }
+const cm = $("cut-map");
+cm.addEventListener("pointerdown", (e) => {
+  cm.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, mapPx(e));
+  if (pointers.size === 2) {
+    const [p, q] = [...pointers.values()];
+    drag = { kind: "pinch", d0: Math.hypot(p[0] - q[0], p[1] - q[1]), v0: view, mid: C.fromPixel(view, p[2], [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2]) };
+    return;
+  }
+  const end = endAt(e);
+  drag = { kind: end || "pan", x: e.clientX, y: e.clientY, v0: view, moved: false };
 });
+cm.addEventListener("pointermove", (e) => {
+  const p = mapXY(e);
+  showAt(p);
+  if (pointers.has(e.pointerId)) pointers.set(e.pointerId, mapPx(e));
+  if (drag && drag.kind === "pinch" && pointers.size === 2) {
+    const [a, b] = [...pointers.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+    if (drag.d0 > 0) setView(C.zoomView(drag.v0, drag.mid, d / drag.d0));
+    return;
+  }
+  if (drag) {
+    if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 4) drag.moved = true;
+    if (!drag.moved) return;
+    if (drag.kind === "pan") {
+      const w = mapPx(e)[2], f = (2 * drag.v0.half) / w;
+      setView({ cx: drag.v0.cx - (e.clientX - drag.x) * f, cy: drag.v0.cy + (e.clientY - drag.y) * f, half: drag.v0.half });
+    } else {
+      // an end being dragged: the line follows, the section waits for the drop
+      state[drag.kind] = llText(p); $(drag.kind).value = state[drag.kind];
+      drawMap();
+    }
+    return;
+  }
+  const h = endAt(e);
+  if (h !== hot) { hot = h; cm.style.cursor = h ? "grab" : ""; drawMap(); }
+  if (pending) { cursor = p; $("map-hint").textContent = placingHint(); drawMap(); }
+});
+const endDrag = (e) => {
+  pointers.delete(e.pointerId);
+  const d = drag;
+  if (!d) return;
+  if (d.kind === "pinch") { if (!pointers.size) drag = null; return; }
+  drag = null;
+  if (e.type === "pointercancel") return;
+  if (!d.moved) { clickAt(mapXY(e)); return; }
+  if (d.kind === "a" || d.kind === "b") { state.cam = null; syncInputs(); writeHash(); build(); }
+};
+cm.addEventListener("pointerup", endDrag);
+cm.addEventListener("pointercancel", endDrag);
+cm.addEventListener("pointerleave", () => { $("map-at").textContent = ""; if (!drag) { cursor = null; hot = null; drawMap(); } });
+cm.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const dy = e.deltaMode === 1 ? e.deltaY * 30 : e.deltaY;
+  setView(C.zoomView(view, mapXY(e), Math.exp(-dy * 0.002)));
+}, { passive: false });
+const zoomBy = (k) => setView(C.zoomView(view, [view.cx, view.cy], k));
+$("map-in").addEventListener("click", () => zoomBy(2));
+$("map-out").addEventListener("click", () => zoomBy(0.5));
+$("map-fit").addEventListener("click", () => { const { A, B } = ends(); setView(C.viewOf([A, B])); });
+$("map-all").addEventListener("click", () => setView({ cx: 0, cy: 0, half: MAP.half }));
 // Escape gives up placing B
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && pending) { pending = null; cursor = null; state.a = state.b = ""; $("map-hint").textContent = HINT; syncInputs(); drawMap(); }
@@ -551,6 +674,7 @@ function drawAll() {
 // ---------------------------------------------------------------- start
 
 new ResizeObserver(() => drawSection()).observe($("section"));
+new ResizeObserver(() => drawMap()).observe($("cut-map"));
 $("credit").textContent = [C.SOURCES.bedmap.credit, C.SOURCES.rema.credit, C.SOURCES.gebco.credit].join(". ") + ".";
 syncInputs();
 resize();

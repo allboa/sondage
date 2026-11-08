@@ -18,10 +18,12 @@ export const INK = { rock: "#7a6552", water: "#1d5f9e", ice: "#e3f0fb", sky: "#0
 
 // The section's rock, water and ice as filled bands between the floor and
 // the top, and a fine line at the base of floating ice. rows: [{ s, l }];
-// X(s) and Y(height) in canvas pixels.
-export function paintBands(g, rows, floor, top, X, Y) {
+// X(s) and Y(height) in canvas pixels; bands picks some of the three (the
+// base line goes with the ice).
+export function paintBands(g, rows, floor, top, X, Y, bands = ["rock", "water", "ice"]) {
   const st = rows.map((r) => C.stack(r.l, floor));
   for (const [band, ink] of [["rock", INK.rock], ["water", INK.water], ["ice", INK.ice]]) {
+    if (!bands.includes(band)) continue;
     g.fillStyle = ink;
     let run = [];
     const flush = () => {
@@ -36,6 +38,7 @@ export function paintBands(g, rows, floor, top, X, Y) {
     rows.forEach((r, i) => (st[i] ? run.push(i) : flush()));
     flush();
   }
+  if (!bands.includes("ice")) return;
   g.strokeStyle = INK.base; g.lineWidth = 1;
   g.beginPath();
   let pen = false;
@@ -79,6 +82,9 @@ export function bedColour(l, h) {
 // exaggeration.
 export const placeIn = (cut, ve) => (s, t, m) => C.place(s, t, m * ve, { curve: cut.curve, cs: cut.f.L / 2, ct: (cut.blk.t0 + cut.blk.t1) / 2 });
 
+// how opaque see-through ice is, on its surfaces and the block's sides
+const GLASS = 0.35;
+
 // The block: the bed everywhere, the sea's surface over open water, the ice
 // (solid, glass or off) at its top and under floating ice, the four sides
 // painted with the section along them, and the drill site as a red rod.
@@ -115,15 +121,22 @@ export function drawBlock(group, cut, { ve, ice = "solid" } = {}) {
 
   // one side: a vertical strip from (s0, t0) to (s1, t1), floor to top,
   // painted with the section along it (sky transparent); a strip of many
-  // steps, so a curved block bends with it
+  // steps, so a curved block bends with it. With the ice see-through the
+  // side is two strips on one shape: the rock solid, and the water and ice
+  // as see-through as the ice's surfaces, so the block shows through its
+  // walls.
+  const glass = ice === "glass";
   const face = (side, s0, t0, s1, t1) => {
-    const cv = document.createElement("canvas");
-    cv.width = 1024; cv.height = 512;
-    const g = cv.getContext("2d"), len = Math.hypot(s1 - s0, t1 - t0) || 1;
+    const len = Math.hypot(s1 - s0, t1 - t0) || 1;
     const rr = side.map((r) => ({ s: Math.hypot(r.s0 - s0, r.t0 - t0), l: r.l }));
-    paintBands(g, rr, floor, top, (d) => (d / len) * cv.width, (z) => ((top - z) / (top - floor)) * cv.height);
-    const tex = new THREE.CanvasTexture(cv);
-    tex.colorSpace = THREE.SRGBColorSpace;
+    const paint = (bands) => {
+      const cv = document.createElement("canvas");
+      cv.width = 1024; cv.height = 512;
+      paintBands(cv.getContext("2d"), rr, floor, top, (d) => (d / len) * cv.width, (z) => ((top - z) / (top - floor)) * cv.height, bands);
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    };
     const n = cut.curve ? 96 : 1, pos = [], uv = [], idx = [];
     for (let q = 0; q <= n; q++) {
       const u = q / n, s = s0 + (s1 - s0) * u, t = t0 + (t1 - t0) * u;
@@ -135,14 +148,18 @@ export function drawBlock(group, cut, { ve, ice = "solid" } = {}) {
     geo.setAttribute("position", new THREE.BufferAttribute(Float32Array.from(pos), 3));
     geo.setAttribute("uv", new THREE.BufferAttribute(Float32Array.from(uv), 2));
     geo.setIndex(idx);
-    group.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide })));
+    if (!glass) {
+      group.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: paint(["rock", "water", "ice"]), transparent: true, alphaTest: 0.5, side: THREE.DoubleSide })));
+      return;
+    }
+    group.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: paint(["rock"]), transparent: true, alphaTest: 0.5, side: THREE.DoubleSide })));
+    group.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: paint(["water", "ice"]), transparent: true, opacity: GLASS, alphaTest: 0.01, depthWrite: false, side: THREE.DoubleSide })));
   };
 
   surface((l) => l.bed, bedColour, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
   surface((l) => (l.kind === "sea" ? 0 : NaN), () => [0.12, 0.38, 0.62], new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.45, side: THREE.DoubleSide, depthWrite: false }));
   if (ice !== "off") {
-    const glass = ice === "glass";
-    const iceMat = () => new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, transparent: glass, opacity: glass ? 0.35 : 1, depthWrite: !glass });
+    const iceMat = () => new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, transparent: glass, opacity: glass ? GLASS : 1, depthWrite: !glass });
     surface((l) => (l.ice > 0 ? l.top : NaN), () => [0.92, 0.96, 1], iceMat());
     surface((l) => (l.kind === "floating" ? l.base : NaN), () => [0.62, 0.78, 0.92], iceMat());
   }

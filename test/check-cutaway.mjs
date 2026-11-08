@@ -114,5 +114,25 @@ ok([1, 2, 5, 25, 100, 500].every((v) => Math.abs(C.veOfSlider(C.sliderOfVe(v)) -
 ok(C.autoExaggeration(700000, 3000) === 25, `auto exaggeration ${C.autoExaggeration(700000, 3000)}`);
 ok(C.PRESETS.every((p) => p.a[1] < -50 && p.b[1] < -50), "presets in the south");
 
+// the legend map's view: zoom about a point, clamp to the grid, fit points
+{
+  const v0 = { cx: 0, cy: 0, half: C.MAP_HALF };
+  const p = [1000000, -500000];
+  const v = C.zoomView(v0, p, 4);
+  near(v.half, C.MAP_HALF / 4, 1e-6, "zoom halves the span twice");
+  const q0 = C.toPixel(v0, 300, p), q1 = C.toPixel(v, 300, p);
+  near(q1[0], q0[0], 1e-9, "the point under the cursor stays put (x)"); near(q1[1], q0[1], 1e-9, "(y)");
+  const back = C.fromPixel(v, 300, C.toPixel(v, 300, [123456, -654321]));
+  near(back[0], 123456, 1e-6, "pixel round trip x"); near(back[1], -654321, 1e-6, "pixel round trip y");
+  ok(C.zoomView(v0, p, 1e9).half === C.MAP_MIN_HALF, "no closer than the least span");
+  const out = C.zoomView(v, [3000000, 3000000], 0.01);
+  ok(out.half === C.MAP_HALF && out.cx === 0 && out.cy === 0, "fully out is the whole grid");
+  const edge = C.clampView({ cx: 3300000, cy: -3300000, half: 100000 });
+  ok(edge.cx === C.MAP_HALF - 100000 && edge.cy === -(C.MAP_HALF - 100000), `kept on the grid (${edge.cx}, ${edge.cy})`);
+  const f = C.viewOf([[0, 0], [20000, 10000]], 1.5);
+  ok(f.cx === 10000 && f.cy === 5000 && f.half === 15000, `fit two points (${JSON.stringify(f)})`);
+  ok(C.scaleBar(100000) === 20000 && C.scaleBar(6667000) === 1000000 && C.scaleBar(5000) === 1000, "scale bar lengths");
+}
+
 console.log(fails ? `${fails} failed` : "cutaway: all checks pass");
 process.exit(fails ? 1 : 0);

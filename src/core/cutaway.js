@@ -286,3 +286,35 @@ export function autoExaggeration(L, dz) {
   for (const s of steps) if (s <= v * 1.2) best = s;
   return best;
 }
+
+// ---------------------------------------------------------------- the legend map
+
+// The legend map's view: a square of half-width half metres about (cx, cy)
+// in EPSG:3031, from all of Bedmap3's grid down to a few kilometres across,
+// its centre kept on the grid.
+export const MAP_HALF = 3333500, MAP_MIN_HALF = 2500;
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+export function clampView(v, max = MAP_HALF, min = MAP_MIN_HALF) {
+  const half = clamp(v.half, min, max), lim = max - half;
+  return { cx: clamp(v.cx, -lim, lim), cy: clamp(v.cy, -lim, lim), half };
+}
+// zoomed by k (above 1 in, below 1 out) about the point p, which stays put
+// on the canvas (unless the clamp moves it)
+export function zoomView(v, p, k, max = MAP_HALF, min = MAP_MIN_HALF) {
+  const half = clamp(v.half / k, min, max), r = half / v.half;
+  return clampView({ cx: p[0] + (v.cx - p[0]) * r, cy: p[1] + (v.cy - p[1]) * r, half }, max, min);
+}
+// the view holding the points ps with a margin
+export function viewOf(ps, margin = 1.3, max = MAP_HALF, min = MAP_MIN_HALF) {
+  const xs = ps.map((p) => p[0]), ys = ps.map((p) => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  return clampView({ cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, half: (Math.max(x1 - x0, y1 - y0) / 2) * margin }, max, min);
+}
+// a point in metres to canvas pixels for a canvas n pixels square, and back
+export const toPixel = (v, n, p) => [((p[0] - v.cx + v.half) / (2 * v.half)) * n, ((v.cy + v.half - p[1]) / (2 * v.half)) * n];
+export const fromPixel = (v, n, q) => [v.cx - v.half + (q[0] / n) * 2 * v.half, v.cy + v.half - (q[1] / n) * 2 * v.half];
+// a scale bar about a quarter of a span of metres: a round length in metres
+export function scaleBar(span) {
+  const raw = span / 4, p = 10 ** Math.floor(Math.log10(raw)), f = raw / p;
+  return (f < 2 ? 1 : f < 5 ? 2 : 5) * p;
+}
